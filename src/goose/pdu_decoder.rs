@@ -1,0 +1,244 @@
+#![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
+
+use crate::goose::basic_decoder::*;
+use crate::goose::error::GooseError;
+use crate::goose::types::*;
+use log::error;
+
+pub fn decodeIECDataElement(buffer: &[u8], pos: usize) -> Result<(usize, IECData), GooseError> {
+    let mut new_pos = pos;
+
+    let mut tag: u8 = 0;
+    let mut length: usize = 0;
+
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+
+    match tag {
+        0x83 => {
+            let mut val: bool = false;
+            new_pos = decode_boolean(&mut val, buffer, new_pos);
+            return Ok((new_pos, IECData::boolean(val)));
+        }
+        0x85 => match length {
+            1 => {
+                let mut val: i8 = 0;
+                new_pos = decode_interger_8(&mut val, buffer, new_pos, length);
+                return Ok((new_pos, IECData::int8(val)));
+            }
+            2 => {
+                let mut val: i16 = 0;
+                new_pos = decode_interger_16(&mut val, buffer, new_pos, length);
+                return Ok((new_pos, IECData::int16(val)));
+            }
+            3..=4 => {
+                let mut val: i32 = 0;
+                new_pos = decode_interger(&mut val, buffer, new_pos, length);
+                return Ok((new_pos, IECData::int32(val)));
+            }
+            5..=8 => {
+                let mut val: i64 = 0;
+                new_pos = decode_interger_64(&mut val, buffer, new_pos, length);
+                return Ok((new_pos, IECData::int64(val)));
+            }
+            _ => {
+                return Err(GooseError {
+                    message: "oversize signed interger".to_string(),
+                    pos: new_pos,
+                });
+            }
+        },
+        0x86 => {
+            match length {
+                1 => {
+                    let mut val: u8 = 0;
+                    new_pos = decode_unsigned_8(&mut val, buffer, new_pos, length);
+                    return Ok((new_pos, IECData::int8u(val)));
+                }
+                2 => {
+                    let mut val: u16 = 0;
+                    new_pos = decode_unsigned_16(&mut val, buffer, new_pos, length);
+                    return Ok((new_pos, IECData::int16u(val)));
+                }
+                3..=4 => {
+                    let mut val: u32 = 0;
+                    new_pos = decode_unsigned(&mut val, buffer, new_pos, length);
+                    return Ok((new_pos, IECData::int32u(val)));
+                }
+                5 => {
+                    // only occur when 32bit unsigned prepend with zero
+                    if buffer[new_pos] != 0x00 {
+                        return Err(GooseError {
+                            message: "oversize unsigned interger".to_string(),
+                            pos: new_pos,
+                        });
+                    }
+                    let mut val: u32 = 0;
+                    new_pos = decode_unsigned(&mut val, buffer, new_pos + 1, length - 1);
+                    return Ok((new_pos, IECData::int32u(val)));
+                }
+                6..=8 => {
+                    // no support for u64
+                    return Err(GooseError {
+                        message: "oversize unsigned interger".to_string(),
+                        pos: new_pos,
+                    });
+                }
+                _ => {
+                    return Err(GooseError {
+                        message: "oversize unsigned interger".to_string(),
+                        pos: new_pos,
+                    });
+                }
+            }
+        }
+        0x87 => match length {
+            5 => {
+                let mut val: f32 = 0.0;
+                new_pos = decode_float(&mut val, buffer, new_pos, length);
+                return Ok((new_pos, IECData::float32(val)));
+            }
+            9 => {
+                let mut val: f64 = 0.0;
+                new_pos = decode_float_64(&mut val, buffer, new_pos, length);
+                return Ok((new_pos, IECData::float64(val)));
+            }
+            _ => {
+                return Err(GooseError {
+                    message: "unexpexted size float".to_string(),
+                    pos: new_pos,
+                });
+            }
+        },
+        0x8a => {
+            let mut val: String = "".to_string();
+            new_pos = decode_string(&mut val, buffer, new_pos, length);
+            return Ok((new_pos, IECData::visible_string(val)));
+        }
+        0x90 => {
+            let mut val: String = "".to_string();
+            new_pos = decode_string(&mut val, buffer, new_pos, length);
+            return Ok((new_pos, IECData::mms_string(val)));
+        }
+        0x84 => {
+            let mut padding: u8 = 0;
+            let mut val: Vec<u8> = vec![0; length - 1];
+
+            new_pos = decode_bit_string(&mut val, &mut padding, buffer, new_pos, length);
+
+            return Ok((new_pos, IECData::bit_string { val, padding }));
+        }
+        0xa1 => {
+            let mut val: Vec<IECData> = vec![];
+            new_pos = decodeIECData(&mut val, buffer, new_pos, new_pos + length)?;
+            return Ok((new_pos, IECData::array(val)));
+        }
+        0xa2 => {
+            let mut val: Vec<IECData> = vec![];
+            new_pos = decodeIECData(&mut val, buffer, new_pos, new_pos + length)?;
+            return Ok((new_pos, IECData::structure(val)));
+        }
+        0x89 => {
+            let mut val: Vec<u8> = vec![0; length];
+            new_pos = decode_octet_string(&mut val, buffer, new_pos, length);
+            return Ok((new_pos, IECData::octet_string(val)));
+        }
+        0x91 => {
+            let mut val = [0 as u8; 8];
+            new_pos = decode_octet_string(&mut val, buffer, new_pos, length);
+            return Ok((new_pos, IECData::utc_time(val)));
+        }
+        _ => {
+            error!("tag  in error is :{}", tag);
+            return Err(GooseError {
+                message: "unknown data type".to_string(),
+                pos: new_pos,
+            });
+        }
+    };
+}
+
+pub fn decodeIECData(
+    data: &mut Vec<IECData>,
+    buffer: &[u8],
+    pos: usize,
+    end: usize,
+) -> Result<usize, GooseError> {
+    let mut new_pos = pos;
+
+    loop {
+        let (next_pos, new_data) = decodeIECDataElement(buffer, new_pos)?;
+        data.push(new_data);
+        new_pos = next_pos;
+        if new_pos >= end {
+            break;
+        }
+    }
+
+    Ok(new_pos)
+}
+pub fn decodeIECGoosePdu(
+    pdu: &mut IECGoosePdu,
+    buffer: &[u8],
+    pos: usize,
+) -> Result<usize, GooseError> {
+    let mut new_pos = pos;
+    let mut tag: u8 = 0;
+    let mut length: usize = 0;
+
+    //goosePduLength
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+
+    // gocbRef
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_string(&mut pdu.gocbRef, buffer, new_pos, length);
+
+    //timeAllowedtoLive
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_unsigned(&mut pdu.timeAllowedtoLive, buffer, new_pos, length);
+
+    //datSet
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_string(&mut pdu.datSet, buffer, new_pos, length);
+
+    //goID
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_string(&mut pdu.goID, buffer, new_pos, length);
+
+    //t
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_octet_string(&mut pdu.t, buffer, new_pos, length);
+
+    //stNum
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_unsigned(&mut pdu.stNum, buffer, new_pos, length);
+
+    //sqNum
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_unsigned(&mut pdu.sqNum, buffer, new_pos, length);
+
+    //simulation
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_boolean(&mut pdu.simulation, buffer, new_pos);
+
+    //confRev
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_unsigned(&mut pdu.confRev, buffer, new_pos, length);
+
+    //ndsCom
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_boolean(&mut pdu.ndsCom, buffer, new_pos);
+
+    //numDatSetEntries
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    new_pos = decode_unsigned(&mut pdu.numDatSetEntries, buffer, new_pos, length);
+
+    //allData
+    new_pos = decode_tag_length(&mut tag, &mut length, buffer, new_pos);
+    // Clear allData before decoding to prevent old data from accumulating
+    pdu.allData.clear();
+    new_pos = decodeIECData(&mut pdu.allData, buffer, new_pos, new_pos + length)?;
+
+    // println!("decode my  pdu: {:?}",pdu);
+    Ok(new_pos)
+}

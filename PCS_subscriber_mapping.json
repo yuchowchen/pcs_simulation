@@ -1,0 +1,44 @@
+[
+  {
+    "srcAddr": "01:0C:CD:01:00:01",
+    "dstAddr": "01:0C:CD:FF:FF:FF",
+    "TPID": "0x8100",
+    "TCI": "0x8002",
+    "APPID": "0x0101",
+    "gocbRef": "FLEXPIGO/LLN0$GO$gocb1",
+    "datSet": "FLEXPIGO/LLN0$dsGOOSE1",
+    "goID": "FLEXPIGO/LLN0$GO$gocb1",
+    "simulation": "false",
+    "confRev": "1",
+    "ndsCom": "false",
+    "numberOfPcs": "10"
+     },
+  {
+    "srcAddr": "01:0C:CD:01:00:02",
+    "dstAddr": "01:0C:CD:FF:FF:FF",
+    "TPID": "0x8100",
+    "TCI": "0x8002",
+    "APPID": "0x0008",
+    "gocbRef": "FLEXPIGO2/LLN0$GO$Go_Gcb2",
+    "datSet": "FLEXPIGO2/LLN0$dsGOOSE2",
+    "goID": "FLEXPIGO2/LLN0.Go_Gcb2",
+    "simulation": "false",
+    "confRev": "1",
+    "ndsCom": "false",
+    "numberOfPcs": "10"   
+  },
+  {
+    "srcAddr": "01:0C:CD:01:00:03",
+    "dstAddr": "01:0C:CD:FF:FF:FF",
+    "TPID": "0x8100",
+    "TCI": "0x8002",
+    "APPID": "0x0009",
+    "gocbRef": "FLEXPIGO3/LLN0$GO$Go_Gcb3",
+    "datSet": "FLEXPIGO3/LLN0$dsGOOSE3",
+    "goID": "FLEXPIGO3/LLN0.Go_Gcb3",
+    "simulation": "false",
+    "confRev": "1",
+    "ndsCom": "false",
+    "numberOfPcs": "12"
+  }
+]

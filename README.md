@@ -1,0 +1,10 @@
+This is a simulator for PCS. It is designed to help users understand and test the functionality of PCS in a controlled environment. The simulator allows for various configurations and scenarios to be tested without the need for physical hardware. 
+All pcs received commands from the pcs controller over IEC61850 GOOSE protocol. goose_interface LAN1 and LAN2 are configured in Config.toml file.
+The baisc configuration parameters for each pcs is defined in the pcs.csv file. Each pcs can be configured with different parameters for goose frame such as APPID, VLAN ID, Priority, etc. 
+each pcs is assgined to a specific type. the type defines the goose all data format for that pcs. The pcs types and their corresponding goose all data formats are defined in the PCS_publisher_alldata_mapping.json file.
+THe following task shoudl be completed to run the simulator:
+1. Configure the goose_interface parameters in Config.toml file.
+2. Define the pcs parameters and pcs googse configure of each pcs in pcs.csv file.
+3. Define the pcs types and their corresponding goose all data formats in pcs_publisher_alldata_mapping.json file.
+4. Run the simulator and monitor the pcs behavior based on the received goose commands. the goose commands all data format should match the pcs type defined in pcs_subscriber_mapping.json file. the pcs controller all data contain active power and reactive power enable commands with boolean type fields and active power and reactive power setpoint commands with float type fields. each goose command configure should match the pcs type defined in pcs_publisher_alldata_mapping.json file. numbofpcs paramters in the json file defines the all data fileds including how many pcs are controlled by this goose command. 
+5. each pcs will decode the received goose commnands and update the  acitvie power and reactive power feedback according to setpoints accordingly.
