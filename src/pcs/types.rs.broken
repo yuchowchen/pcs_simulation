@@ -123,11 +123,6 @@ impl PublisherPcsData {
     pub fn set_nameplate(&mut self, cfg: crate::pcs::NameplateConfig) {
         self.nameplate = Some(cfg);
     }
-    /// Get the nameplate configuration
-    pub fn get_nameplate(&self) -> Option<&crate::pcs::NameplateConfig> {
-        self.nameplate.as_ref()
-    }
-
 
     /// Update the goosepdu field with new GOOSE packet data and timestamps.
     /// This is called when a new GOOSE packet is received for this PCS.
@@ -739,105 +734,9 @@ impl MutablePcsData {
     }
 }
 
+
 impl Default for MutablePcsData {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Container for PCS process data including index and mutable storage
-#[derive(Debug)]
-pub struct ProcessData {
-    /// Immutable APPID index - safe to share across threads without locks
-    pub appid_index: AppIdIndex,
-    /// Mutable PCS data - requires synchronization for thread safety
-    pub mutable_data: MutablePcsData,
-}
-
-impl Default for ProcessData {
-    fn default() -> Self {
-        Self {
-            appid_index: AppIdIndex::default(),
-            mutable_data: MutablePcsData::default(),
-        }
-    }
-}
-
-impl ProcessData {
-    /// Initialize ProcessData from nameplate CSV file
-    /// Populates both LAN1 and LAN2 data structures and builds APPID indices
-    pub fn init_from_nameplates<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        use log::{error, info};
-        
-        // Load nameplate configurations directly from CSV
-        let mut nameplate_configs = match crate::pcs::nameplate::load_nameplates_from_csv(path) {
-            Ok(configs) => configs,
-            Err(e) => {
-                error!("Failed to load nameplate configurations: {}", e);
-                return Err(e);
-            }
-        };
-        
-        // Sort nameplate configurations by logical_id for better cache locality and performance
-        nameplate_configs.sort_by_key(|config| config.logical_id);
-        
-        info!("Sorted {} nameplate configurations by logical_id for optimized insertion", nameplate_configs.len());
-        
-        // Clear existing data and indices
-        self.mutable_data.pcs_all_lan1.clear();
-        self.mutable_data.pcs_all_lan2.clear();
-        self.appid_index.appid_to_logical_lan1.clear();
-        self.appid_index.appid_to_logical_lan2.clear();
-        
-        // Build PCS data from nameplate configurations (now in sorted order)
-        for config in nameplate_configs {
-            // Extract logical_id from nameplate config, skip if None
-            let logical_id = match config.logical_id {
-                Some(id) => id,
-                None => {
-                    error!("Skipping nameplate config without logical_id: {:?}", config.device_id);
-                    continue;
-                }
-            };
-            
-            // Create PublisherPcsData instance
-            let mut pcs = PublisherPcsData::new();
-            pcs.set_nameplate(config.clone());
-            
-            // Clone the PCS data for both LANs (identical initialization)
-            let pcs_lan1 = pcs.clone();
-            let pcs_lan2 = pcs;
-            
-            // Insert into LAN1 HashMap and build APPID index
-            if let Some(appid) = pcs_lan1.nameplate_appid() {
-                self.appid_index.appid_to_logical_lan1.insert(appid, (logical_id, config.pcs_type.clone().unwrap_or_default()));
-            }
-            self.mutable_data.pcs_all_lan1.insert(logical_id, pcs_lan1);
-            
-            // Insert into LAN2 HashMap and build APPID index (identical to LAN1)
-            if let Some(appid) = pcs_lan2.nameplate_appid() {
-                self.appid_index.appid_to_logical_lan2.insert(appid, (logical_id, config.pcs_type.clone().unwrap_or_default()));
-            }
-            self.mutable_data.pcs_all_lan2.insert(logical_id, pcs_lan2);
-        }
-        
-        info!("Initialized {} PCS units in LAN1 and {} in LAN2", 
-             self.mutable_data.pcs_all_lan1.len(),
-             self.mutable_data.pcs_all_lan2.len());
-        
-        Ok(())
-    }
-
-    /// Decompose ProcessData into its components for Arc-wrapping
-    pub fn into_components(self) -> (AppIdIndex, MutablePcsData) {
-        (self.appid_index, self.mutable_data)
-    }
-
-    /// Reconstruct ProcessData from components
-    pub fn from_components(appid_index: AppIdIndex, mutable_data: MutablePcsData) -> Self {
-        ProcessData {
-            appid_index,
-            mutable_data,
-        }
     }
 }

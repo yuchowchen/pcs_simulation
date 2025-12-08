@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use crate::pcs::SubscriberPCSData;
+use crate::pcs::PublisherPcsData;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone,Serialize,Deserialize)]
@@ -261,13 +261,13 @@ impl StPCSinfo {
     /// Sentinel value indicating invalid/missing data
     pub const INVALID_VALUE: f32 = 999999.0;
 
-    /// Populate StPCSinfo from SubscriberPCSData using configuration mappings
+    /// Populate StPCSinfo from PublisherPcsData using configuration mappings
     /// 
     /// # Arguments
     /// * `logical_id` - The logical ID of the PCS
     /// * `pcstype` - The PCS type string (e.g., "PCS-A", "PCS-B")
     /// * `cfg` - Configuration mapping for data field positions
-    /// * `subscriber` - The source SubscriberPCSData to extract values from
+    /// * `subscriber` - The source PublisherPcsData to extract values from
     /// 
     /// # Returns
     /// * `Ok(())` if data was successfully extracted
@@ -283,7 +283,7 @@ impl StPCSinfo {
         logical_id: u16, 
         pcstype: String, 
         cfg: &HashMap<String, (StPCSDataBytePosInAllDataCfg, Vec<u8>)>,
-        subscriber: &SubscriberPCSData
+        subscriber: &PublisherPcsData
     ) -> Result<(), String> {
         // Set basic fields
         self.logical_id = logical_id;

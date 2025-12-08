@@ -1,5 +1,5 @@
 use crate::pcs::process_data::{AppIdIndex, MutablePcsData};
-// use crate::pcs::types::SubscriberPCSData;
+// use crate::pcs::types::PublisherPcsData;
 use crate::plc::types::{StPCSDataBytePosInAllDataCfg, StPCSImage, StPCSinfo};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,7 +61,7 @@ pub fn get_stpcsimage(
                 info_lan1.logical_id,
                 pcstype,
                 cfg,
-                &*pcs_ref, // Dereference to get &SubscriberPCSData
+                &*pcs_ref, // Dereference to get &PublisherPcsData
             );
             // Lock is released here when pcs_ref goes out of scope
 
@@ -97,7 +97,7 @@ pub fn get_stpcsimage(
                 info_lan2.logical_id,
                 pcstype,
                 cfg,
-                &*pcs_ref, // Dereference to get &SubscriberPCSData
+                &*pcs_ref, // Dereference to get &PublisherPcsData
             );
             // Lock is released here when pcs_ref goes out of scope
 

@@ -3,7 +3,7 @@
 
 use crate::goose::buffer_pool::PooledBuffer;
 use crate::goose::pdu::decodeGooseFrame;
-use crate::pcs::types::SubscriberPCSData;
+use crate::pcs::types::PublisherPcsData;
 use std::sync::{Arc, Mutex};
 use log::{info, warn};
 
@@ -12,7 +12,7 @@ pub struct PacketData {
     pub data: PooledBuffer,
 }
 
-pub fn process_rx_packet(pcs_data_pool: Arc<Mutex<std::collections::HashMap<u16, SubscriberPCSData>>>, (lan_id, packet): (u16, PacketData)) {
+pub fn process_rx_packet(pcs_data_pool: Arc<Mutex<std::collections::HashMap<u16, PublisherPcsData>>>, (lan_id, packet): (u16, PacketData)) {
     // Replace with your actual processing logic
     let mut rx_header = Default::default();
     let mut rx_pdu = Default::default();

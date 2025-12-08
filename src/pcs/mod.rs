@@ -1,20 +1,18 @@
-//! PCS (Power Conversion System) related types and helpers.
-//!
-//! This module exposes submodules for PCS nameplate information and
-//! runtime process data used by the GOOSE publisher/subscriber code.
+//! PCS data structures and nameplate configuration.
 
+// Submodules
 pub mod nameplate;
-pub mod process_data;
 pub mod types;
+pub mod publisher;
 
-// Re-export commonly used types at the module root here if needed, e.g.
+// Re-export main types
 pub use nameplate::NameplateConfig;
-pub use process_data::{ProcessData, AppIdIndex, MutablePcsData};
-pub use types::{SubscriberPCSData};
+pub use types::{PublisherPcsData, AppIdIndex, MutablePcsData, ProcessData};
+pub use publisher::{load_pcs_type_mappings, init_goose_frame_for_pcs, update_goose_frame_data, GooseFrame, PcsTypeMapping};
 
-/// Convenience prelude for PCS types.
+// Prelude for convenient imports
 pub mod prelude {
-	pub use super::NameplateConfig;
-	pub use super::{ProcessData, AppIdIndex, MutablePcsData};
-	pub use super::{SubscriberPCSData};
+pub use super::NameplateConfig;
+pub use super::{PublisherPcsData, AppIdIndex, MutablePcsData, ProcessData};
+pub use super::{GooseFrame, PcsTypeMapping};
 }

@@ -3,7 +3,7 @@
 // function to update the process data structure when new goose message received.
 use anyhow::Result;
 use crate::goose::types::{EthernetHeader, IECGoosePdu};
-use crate::pcs::SubscriberPCSData;
+use crate::pcs::PublisherPcsData;
 use dashmap::DashMap;
 use log::{error, info};
 
@@ -31,8 +31,8 @@ impl Default for AppIdIndex {
 #[derive(Debug, Default)]
 pub struct MutablePcsData {
     /// Primary storage indexed by logical_id for fast logical_id lookups
-    pub pcs_all_lan1: DashMap<u16, SubscriberPCSData>,
-    pub pcs_all_lan2: DashMap<u16, SubscriberPCSData>,
+    pub pcs_all_lan1: DashMap<u16, PublisherPcsData>,
+    pub pcs_all_lan2: DashMap<u16, PublisherPcsData>,
 }
 
 /// Main ProcessData structure separating immutable index from mutable data
@@ -292,8 +292,8 @@ impl ProcessData {
                 }
             };
             
-            // Create SubscriberPCSData instance
-            let mut pcs = SubscriberPCSData::new();
+            // Create PublisherPcsData instance
+            let mut pcs = PublisherPcsData::new();
             pcs.set_nameplate(config.clone());
             
             // Clone the PCS data for both LANs (identical initialization)
@@ -324,7 +324,7 @@ impl ProcessData {
  
     /// Get all PCS data from specified LAN for monitoring/debugging
     /// lan_id: 1 for LAN1, 2 for LAN2
-    pub fn get_pcs_data_by_lan(&self, lan_id: u8) -> Vec<SubscriberPCSData> {
+    pub fn get_pcs_data_by_lan(&self, lan_id: u8) -> Vec<PublisherPcsData> {
         match lan_id {
             1 => self.mutable_data.pcs_all_lan1.iter().map(|entry| entry.value().clone()).collect(),
             2 => self.mutable_data.pcs_all_lan2.iter().map(|entry| entry.value().clone()).collect(),
@@ -351,8 +351,8 @@ impl ProcessData {
 
     /// Fast lookup: Get PCS data by logical_id from specified LAN (O(1) operation)
     /// lan_id: 1 for LAN1, 2 for LAN2
-    /// Returns a reference guard that dereferences to SubscriberPCSData
-    pub fn get_pcs_by_logical_id(&self, logical_id: u16, lan_id: u8) -> Option<dashmap::mapref::one::Ref<'_, u16, SubscriberPCSData>> {
+    /// Returns a reference guard that dereferences to PublisherPcsData
+    pub fn get_pcs_by_logical_id(&self, logical_id: u16, lan_id: u8) -> Option<dashmap::mapref::one::Ref<'_, u16, PublisherPcsData>> {
         match lan_id {
             1 => self.mutable_data.pcs_all_lan1.get(&logical_id),
             2 => self.mutable_data.pcs_all_lan2.get(&logical_id),
@@ -362,8 +362,8 @@ impl ProcessData {
 
     /// Fast lookup: Get mutable PCS data by logical_id from specified LAN (O(1) operation)
     /// lan_id: 1 for LAN1, 2 for LAN2
-    /// Returns a mutable reference guard that dereferences to SubscriberPCSData
-    pub fn get_pcs_by_logical_id_mut(&mut self, logical_id: u16, lan_id: u8) -> Option<dashmap::mapref::one::RefMut<'_, u16, SubscriberPCSData>> {
+    /// Returns a mutable reference guard that dereferences to PublisherPcsData
+    pub fn get_pcs_by_logical_id_mut(&mut self, logical_id: u16, lan_id: u8) -> Option<dashmap::mapref::one::RefMut<'_, u16, PublisherPcsData>> {
         match lan_id {
             1 => self.mutable_data.pcs_all_lan1.get_mut(&logical_id),
             2 => self.mutable_data.pcs_all_lan2.get_mut(&logical_id),
@@ -372,7 +372,7 @@ impl ProcessData {
     }
 
     /// Get PCS data by logical_id from both LANs (returns (lan1_pcs, lan2_pcs))
-    pub fn get_pcs_by_logical_id_both_lans(&self, logical_id: u16) -> (Option<dashmap::mapref::one::Ref<'_, u16, SubscriberPCSData>>, Option<dashmap::mapref::one::Ref<'_, u16, SubscriberPCSData>>) {
+    pub fn get_pcs_by_logical_id_both_lans(&self, logical_id: u16) -> (Option<dashmap::mapref::one::Ref<'_, u16, PublisherPcsData>>, Option<dashmap::mapref::one::Ref<'_, u16, PublisherPcsData>>) {
         let lan1_pcs = self.mutable_data.pcs_all_lan1.get(&logical_id);
         let lan2_pcs = self.mutable_data.pcs_all_lan2.get(&logical_id);
         (lan1_pcs, lan2_pcs)
@@ -380,8 +380,8 @@ impl ProcessData {
 
     /// Fast lookup: Get PCS data by goose_appid from specified LAN (O(1) operation)
     /// lan_id: 1 for LAN1, 2 for LAN2
-    /// Returns a reference guard that dereferences to SubscriberPCSData
-    pub fn get_pcs_by_appid(&self, appid: u16, lan_id: u8) -> Option<dashmap::mapref::one::Ref<'_, u16, SubscriberPCSData>> {
+    /// Returns a reference guard that dereferences to PublisherPcsData
+    pub fn get_pcs_by_appid(&self, appid: u16, lan_id: u8) -> Option<dashmap::mapref::one::Ref<'_, u16, PublisherPcsData>> {
         match lan_id {
             1 => {
                 if let Some(&(logical_id, ref _pcs_type)) = self.appid_index.appid_to_logical_lan1.get(&appid) {
@@ -403,8 +403,8 @@ impl ProcessData {
 
     /// Fast lookup: Get mutable PCS data by goose_appid from specified LAN (O(1) operation)
     /// lan_id: 1 for LAN1, 2 for LAN2
-    /// Returns a mutable reference guard that dereferences to SubscriberPCSData
-    pub fn get_pcs_by_appid_mut(&mut self, appid: u16, lan_id: u8) -> Option<dashmap::mapref::one::RefMut<'_, u16, SubscriberPCSData>> {
+    /// Returns a mutable reference guard that dereferences to PublisherPcsData
+    pub fn get_pcs_by_appid_mut(&mut self, appid: u16, lan_id: u8) -> Option<dashmap::mapref::one::RefMut<'_, u16, PublisherPcsData>> {
         match lan_id {
             1 => {
                 if let Some(logical_id) = self.appid_index.appid_to_logical_lan1.get(&appid).map(|&(logical_id, _)| logical_id) {
@@ -425,14 +425,14 @@ impl ProcessData {
     }
 
     /// Get PCS data by goose_appid from both LANs (returns (lan1_pcs, lan2_pcs))
-    pub fn get_pcs_by_appid_both_lans(&self, appid: u16) -> (Option<dashmap::mapref::one::Ref<'_, u16, SubscriberPCSData>>, Option<dashmap::mapref::one::Ref<'_, u16, SubscriberPCSData>>) {
+    pub fn get_pcs_by_appid_both_lans(&self, appid: u16) -> (Option<dashmap::mapref::one::Ref<'_, u16, PublisherPcsData>>, Option<dashmap::mapref::one::Ref<'_, u16, PublisherPcsData>>) {
         let lan1_pcs = self.get_pcs_by_appid(appid, 1);
         let lan2_pcs = self.get_pcs_by_appid(appid, 2);
         (lan1_pcs, lan2_pcs)
     }
 
     /// Add a PCS to LAN1 (with automatic index building)
-    pub fn add_pcs_to_lan1(&mut self, logical_id: u16, pcs: SubscriberPCSData) {
+    pub fn add_pcs_to_lan1(&mut self, logical_id: u16, pcs: PublisherPcsData) {
         // Build APPID index if nameplate has APPID
         if let Some(appid) = pcs.nameplate_appid() {
             self.appid_index.appid_to_logical_lan1.insert(appid, (logical_id, pcs.nameplate_pcs_type().unwrap_or_default()));
@@ -441,7 +441,7 @@ impl ProcessData {
     }
 
     /// Add a PCS to LAN2 (with automatic index building)
-    pub fn add_pcs_to_lan2(&mut self, logical_id: u16, pcs: SubscriberPCSData) {
+    pub fn add_pcs_to_lan2(&mut self, logical_id: u16, pcs: PublisherPcsData) {
         // Build APPID index if nameplate has APPID
         if let Some(appid) = pcs.nameplate_appid() {
             self.appid_index.appid_to_logical_lan2.insert(appid, (logical_id, pcs.nameplate_pcs_type().unwrap_or_default()));
@@ -763,7 +763,7 @@ impl MutablePcsData {
     pub fn recalculate_totals_by_lan(&self, lan_id: u8) -> (f32, f32) {
         use crate::goose::types::IECData;
         
-        fn extract_power_values(pcs: &SubscriberPCSData) -> Option<(f32, f32)> {
+        fn extract_power_values(pcs: &PublisherPcsData) -> Option<(f32, f32)> {
             fn collect_f32(acc: &mut Vec<f32>, data: &IECData) {
                 match data {
                     IECData::float32(v) => acc.push(*v),

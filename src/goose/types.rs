@@ -260,7 +260,7 @@ impl IECData {
     }
 }
 
-#[derive(Debug,Default)]
+#[derive(Debug,Default,Clone)]
 pub struct EthernetHeader {
     pub srcAddr:[u8;6],
     pub dstAddr:[u8;6],
