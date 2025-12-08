@@ -6,23 +6,15 @@
 
 use anyhow::Result;
 use crossbeam_channel::{bounded};
-use goose_pcs::goose::buffer_pool::BufferPool;
-use goose_pcs::goose::packet_processor::PacketData;
-use goose_pcs::network::setup_network_channels;
-use goose_pcs::pcs::ProcessData;
-
-use goose_pcs::threads::*;
-use goose_pcs::threads::worker::spawn_worker_threads_enhanced;
+use pcs_simulator::goose::buffer_pool::BufferPool;
+use pcs_simulator::goose::packet_processor::PacketData;
+use pcs_simulator::network::setup_network_channels;
+use pcs_simulator::pcs::ProcessData;
+use pcs_simulator::threads::*;
+use pcs_simulator::threads::worker::spawn_worker_threads_enhanced;
 use log::{error, info};
 
-
-
-
-
 use std::sync::Arc;
-
-
-
 fn main() {
     if let Err(e) = run() {
         error!("Application error: {:?}", e);
@@ -35,7 +27,7 @@ fn run() -> Result<()> {
     info!("PCS Simulator Starting (Enhanced)");
     info!("========================================");
 
-    let config_paras = match goose_pcs::os::start::start() {
+    let config_paras = match pcs_simulator::os::start::start() {
         Ok(params) => {
             println!("✅ Application startup configuration successful");
             params

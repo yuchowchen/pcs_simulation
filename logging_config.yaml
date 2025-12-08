@@ -16,7 +16,7 @@ appenders:
         kind: fixed_window
         base: 1
         count: 50
-        pattern: "log/pcsgoogse{}.log"
+        pattern: "log/pcs_simulator{}.log"
 root:
   level: debug
   appenders:

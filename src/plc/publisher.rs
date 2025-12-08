@@ -79,7 +79,7 @@ use crate::goose::types::{EthernetHeader, IECData, IECGoosePdu};
 /// ```no_run
 /// # fn main() -> std::io::Result<()> {
 /// # let datagram = vec![0u8; 100];
-/// # use goose_pcs::plc::publisher::deserialize_stplccmdall;
+/// # use pcs_simulator:plc::publisher::deserialize_stplccmdall;
 /// let cmd = deserialize_stplccmdall(&datagram)?;
 /// println!("Received {} PCS commands", cmd.number_of_pcs);
 /// # Ok(())

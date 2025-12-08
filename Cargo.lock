@@ -414,30 +414,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
-name = "goose_pcs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "chrono",
- "config",
- "crossbeam-channel",
- "crossbeam-queue",
- "csv",
- "dashmap",
- "libc",
- "log",
- "log4rs",
- "num_cpus",
- "pnet",
- "pnet_datalink",
- "serde",
- "serde_json",
- "socket2",
- "tempfile",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -704,6 +680,30 @@ name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
+name = "pcs_simulator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "chrono",
+ "config",
+ "crossbeam-channel",
+ "crossbeam-queue",
+ "csv",
+ "dashmap",
+ "libc",
+ "log",
+ "log4rs",
+ "num_cpus",
+ "pnet",
+ "pnet_datalink",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tempfile",
+]
 
 [[package]]
 name = "pest"

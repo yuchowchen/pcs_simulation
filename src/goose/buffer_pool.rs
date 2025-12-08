@@ -91,7 +91,7 @@ impl BufferPool {
     /// 
     /// # Example
     /// ```
-    /// use goose_pcs::goose::buffer_pool::BufferPool;
+    /// use pcs_simulator:goose::buffer_pool::BufferPool;
     /// 
     /// // Create pool with 8192 buffers (enough for 4096 channel + some margin)
     /// let pool = BufferPool::new(8192);

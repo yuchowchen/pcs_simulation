@@ -15,7 +15,7 @@ use std::thread::{self, JoinHandle};
 /// 
 /// # Returns
 /// * `Option<JoinHandle<()>>` - Join handle if at least one transmitter is available
-pub fn spawn_goose_sender_thread(
+pub fn spawn_goose_publisher_thread(
     goose_rx: Receiver<Vec<u8>>,
     mut tx_lan1: Option<Box<dyn DataLinkSender>>,
     mut tx_lan2: Option<Box<dyn DataLinkSender>>,

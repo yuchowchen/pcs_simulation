@@ -201,7 +201,7 @@ pub fn load_pcs_alldata_config<P: AsRef<Path>>(
 ///
 /// # Example
 /// ```no_run
-/// use goose_pcs::plc::types::{load_pcs_alldata_config, get_total_pcs_quantity};
+/// use pcs_simulator:plc::types::{load_pcs_alldata_config, get_total_pcs_quantity};
 /// 
 /// # fn main() -> anyhow::Result<()> {
 /// let configs_with_status = load_pcs_alldata_config("config.json")?;
@@ -233,7 +233,7 @@ pub fn get_total_pcs_quantity(configs: &[StPCSDataBytePosInAllDataCfg]) -> usize
 ///
 /// # Example
 /// ```no_run
-/// use goose_pcs::plc::types::{load_pcs_alldata_config, count_pcs_by_type};
+/// use pcs_simulator:plc::types::{load_pcs_alldata_config, count_pcs_by_type};
 /// 
 /// # fn main() -> anyhow::Result<()> {
 /// let configs_with_status = load_pcs_alldata_config("config.json")?;
