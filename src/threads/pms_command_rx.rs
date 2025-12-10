@@ -1,12 +1,11 @@
 use crate::goose::packet_processor::PacketData;
 use crate::os::linux_rt::pin_thread_to_core;
-use crate::pcs::{MutablePcsData};
 use crate::pms::types::PmsGooseCmdSubscriber;
 use crate::pms::types::PmsConfig;
 use crossbeam_channel::Receiver;
+use dashmap::DashMap;
 use libc::sched_getcpu;
 use log::{error, info, warn};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -20,16 +19,16 @@ use std::thread::{self, JoinHandle};
 ///
 /// # Arguments
 /// * `packet_rx` - Receiver for incoming packets (LAN ID, PacketData)
-/// * `appid_index` - Shared APPID index
-/// * `mutable_data` - Shared mutable PCS data (DashMap provides internal concurrency)
+/// * `pms_config` - Shared PMS configuration (Arc for thread-safe sharing)
+/// * `pms_subscribers` - Shared PMS GOOSE command subscribers (DashMap provides internal concurrency)
 /// * `num_workers` - Number of worker threads to spawn
 ///
 /// # Returns
 /// * `Vec<JoinHandle<()>>` - Vector of join handles for spawned threads
 pub fn spawn_worker_threads(
     packet_rx: Receiver<(u16, PacketData)>,
-    pms_config: &PmsConfig,
-    pms : HashMap<u16, PmsGooseCmdSubscriber>,
+    pms_config: Arc<PmsConfig>,
+    pms_subscribers: Arc<DashMap<u16, PmsGooseCmdSubscriber>>,
     num_workers: usize,
 ) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::new();
@@ -42,8 +41,10 @@ pub fn spawn_worker_threads(
         worker_count
     );
 
-    for core_id in 1..worker_count {
+    for core_id in 1..=worker_count {
         let rx = packet_rx.clone();
+        let pms_config = Arc::clone(&pms_config);
+        let pms_subscribers = Arc::clone(&pms_subscribers);
 
         let handle = thread::spawn(move || {
             // Pin thread to core
@@ -57,6 +58,7 @@ pub fn spawn_worker_threads(
             while let Ok((lan_id, packet_data)) = rx.recv() {
                 // REDUCED LOGGING: Too frequent, causes I/O contention
                 // log::debug!("Worker on core {} received packet from LAN{}", core_id, lan_id);
+                
                 // Decode GOOSE frame
                 let mut rx_header = Default::default();
                 let mut rx_pdu = Default::default();
@@ -69,7 +71,7 @@ pub fn spawn_worker_threads(
                 )
                 .is_ok()
                 {
-                    //check if the APPID is included in the pms_command appid list
+                    // Check if the APPID is included in the pms_command appid list
                     let appid = u16::from_be_bytes(rx_header.APPID);
                     if !pms_config.pms_command_appid_list.contains(&appid) {
                         warn!(
@@ -79,48 +81,93 @@ pub fn spawn_worker_threads(
                         continue;
                     }
 
-                    // find the corresponding pms command subscriber for this appid
-                    let pms_command_subscriber = pms.get(&appid);
-                    if pms_command_subscriber.is_none() {
+                    // Find the corresponding pms command subscriber for this appid
+                    if let Some(mut pms_entry) = pms_subscribers.get_mut(&appid) {
+                        // IEC 61850-8-1 GOOSE freshness validation with restart detection:
+                        // 
+                        // A frame is newer if:
+                        //   1. stNum (state number) is greater, OR
+                        //   2. stNum is equal AND sqNum (sequence number) is greater, OR
+                        //   3. Sender restart detected (stNum dropped significantly, suggesting reset to 0)
+                        //
+                        // Restart detection: If rx_stNum < current_stNum by large margin (e.g., > 100),
+                        // assume sender restarted and accept the new frame.
+                        let current_stnum = pms_entry.goosepdu.stNum;
+                        let current_sqnum = pms_entry.goosepdu.sqNum;
+                        let current_confrev = pms_entry.goosepdu.confRev;
+                        let rx_stnum = rx_pdu.stNum;
+                        let rx_sqnum = rx_pdu.sqNum;
+                        let rx_confrev = rx_pdu.confRev;
+
+                        // Detect sender restart: stNum went backwards significantly
+                        const RESTART_THRESHOLD: u32 = 100;
+                        let is_restart = current_stnum > RESTART_THRESHOLD && 
+                                        rx_stnum < current_stnum && 
+                                        (current_stnum - rx_stnum) > RESTART_THRESHOLD;
+
+                        // Configuration revision changed also indicates restart/reconfiguration
+                        let is_reconfig = rx_confrev != current_confrev;
+
+                        let is_newer = (rx_stnum > current_stnum) || 
+                                       (rx_stnum == current_stnum && rx_sqnum > current_sqnum) ||
+                                       is_restart ||
+                                       is_reconfig;
+
+                        if !is_newer {
+                            // Old or duplicate frame - ignore to prevent overwriting newer data
+                            // REDUCED LOGGING: Too frequent
+                            // log::trace!(
+                            //     "Ignoring stale GOOSE frame APPID 0x{:04X} LAN{}: rx(st:{},sq:{}) <= current(st:{},sq:{})",
+                            //     appid, lan_id, rx_stnum, rx_sqnum, current_stnum, current_sqnum
+                            // );
+                            continue;
+                        }
+
+                        // Frame is newer - update stored PDU
+                        if is_restart {
+                            info!(
+                                "GOOSE sender RESTART detected APPID 0x{:04X} LAN{}: stNum dropped {} → {} (confRev:{} → {})",
+                                appid, lan_id, current_stnum, rx_stnum, current_confrev, rx_confrev
+                            );
+                        } else if is_reconfig {
+                            info!(
+                                "GOOSE RECONFIGURATION detected APPID 0x{:04X} LAN{}: confRev changed {} → {} (stNum:{} → {})",
+                                appid, lan_id, current_confrev, rx_confrev, current_stnum, rx_stnum
+                            );
+                        } else {
+                            info!(
+                                "Received new GOOSE command APPID 0x{:04X} LAN{}: (st:{},sq:{}) > (st:{},sq:{})",
+                                appid, lan_id, rx_stnum, rx_sqnum, current_stnum, current_sqnum
+                            );
+                        }
+                        
+                        pms_entry.goosepdu = rx_pdu.clone();
+                        pms_entry.last_update_time = Some(std::time::SystemTime::now());
+
+                        // Get the list of PCS that should receive this command
+                        if let Some(pcs_list) = pms_config.pms_command_pcs_mapping.get(&appid) {
+                            // Process command data for each PCS in the list
+                            // TODO: Parse allData and update PCS command values
+                            info!(
+                                "Command for APPID 0x{:04X} affects {} PCS units: {:?}",
+                                appid, pcs_list.len(), pcs_list
+                            );
+                            
+                            // Extract command data from GOOSE allData
+                            // The allData structure should contain:
+                            // - Boolean enable flags (active/reactive power control)
+                            // - Float setpoint values (active/reactive power)
+                            // This needs to be implemented based on the actual GOOSE data structure
+                        } else {
+                            warn!(
+                                "No PCS mapping found for APPID 0x{:04X} from LAN{}",
+                                appid, lan_id
+                            );
+                        }
+                    } else {
                         warn!(
                             "No PMS command subscriber found for APPID 0x{:04X} from LAN{}",
                             appid, lan_id
-                        );
-                        continue;
-                    }
-                    let pms_command_subscriber = pms_command_subscriber.unwrap();
-
-                    if rx_pdu.stNum > pms_command_subscriber.goosepdu.stNum {
-                        info!(
-                            "Received new GOOSE command for APPID 0x{:04X} from LAN{}",
-                            appid, lan_id
-                        );
-                    }
-                    
-                    // assign pms command to pcs according to pcs logical_id
-                    let pcs_lists = pms_config.pms_command_pcs_mapping.get(&appid);
-                    if pcs_lists.is_none() {
-                        warn!(
-                            "No PCS mapping found for APPID 0x{:04X} from LAN{}",
-                            appid, lan_id
-                        );
-                        continue;
-                    }
-                    let pcs_lists = pcs_lists.unwrap();
-
-                    // Direct update without lock - DashMap provides per-entry locking
-                    let updated = MutablePcsData::update_with_index(
-                        &mutable_data_clone,
-                        &appid_index_clone,
-                        &rx_header,
-                        &rx_pdu,
-                        lan_id,
-                    );
-                    if !updated {
-                        warn!(
-                            "Failed to update PCS data for APPID {} from LAN{}",
-                            u16::from_be_bytes(rx_header.APPID),
-                            lan_id
                         );
                     }
                 } else {
