@@ -17,10 +17,12 @@ use pcs_simulator::pcs::{ProcessData, load_pcs_type_mappings, init_goose_frame_f
                          update_goose_frame_data, GooseFrame, PcsTypeMapping};
 use pcs_simulator::threads::worker::spawn_worker_threads_enhanced;
 use pcs_simulator::threads::validity::spawn_validity_thread;
+use pcs_simulator::threads::RetransmitSignal;
 use log::{error, info, warn};
 use pnet_datalink::DataLinkSender;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 fn main() {
     if let Err(e) = run() {
@@ -79,7 +81,10 @@ fn run() -> Result<()> {
     let (packet_tx, packet_rx) = bounded(16384);
     info!("✅ Network channels ready");
 
-    // Step 6: Spawn worker threads for incoming GOOSE processing
+    // Step 6: Create update signal for instant publisher notification
+    let update_signal = Arc::new(RetransmitSignal::new());
+    
+    // Step 7: Spawn worker threads for incoming GOOSE processing
     let num_workers = num_cpus::get();
     info!("Step 5: Spawning {} worker threads", num_workers);
     let worker_handles = spawn_worker_threads_enhanced(
@@ -87,10 +92,11 @@ fn run() -> Result<()> {
         Arc::clone(&appid_index),
         Arc::clone(&mutable_data),
         num_workers,
+        Some(Arc::clone(&update_signal)),
     );
     info!("✅ Worker threads spawned");
 
-    // Step 7: Spawn validity checker thread
+    // Step 8: Spawn validity checker thread
     info!("Step 6: Spawning validity checker thread");
     let validity_handle = spawn_validity_thread(
         Arc::clone(&mutable_data),
@@ -98,7 +104,7 @@ fn run() -> Result<()> {
     );
     info!("✅ Validity checker spawned");
 
-    // Step 8: Setup GOOSE receivers for both LANs
+    // Step 9: Setup GOOSE receivers for both LANs
     info!("Step 7: Starting GOOSE receivers");
     let buffer_pool = Arc::new(BufferPool::new(8192));
     
@@ -142,7 +148,7 @@ fn run() -> Result<()> {
         })
     });
 
-    // Step 9: Spawn GOOSE publisher thread
+    // Step 10: Spawn GOOSE publisher thread with update signal
     info!("Step 8: Starting GOOSE publisher thread");
     let publisher_handle = spawn_publisher_thread(
         goose_frames,
@@ -150,6 +156,7 @@ fn run() -> Result<()> {
         Arc::clone(&mutable_data),
         network_channels.tx_lan1,
         network_channels.tx_lan2,
+        Arc::clone(&update_signal),
     );
     info!("✅ GOOSE publisher started");
 
@@ -178,14 +185,34 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-/// Initialize GOOSE frames for all PCS units in both LANs
+/// Frame metadata for tracking retransmit timing
+#[derive(Debug, Clone)]
+struct FrameMetadata {
+    frame: GooseFrame,
+    last_update: Option<SystemTime>,  // When PCS data was last updated
+    last_send: Option<Instant>,        // When frame was last sent (for timing)
+    current_interval_ms: u64,
+}
+
+impl FrameMetadata {
+    fn new(frame: GooseFrame) -> Self {
+        Self {
+            frame,
+            last_update: None,
+            last_send: None,
+            current_interval_ms: 2, // Start with 2ms
+        }
+    }
+}
+
+/// Initialize GOOSE frames for all PCS units (unified for both LANs)
 fn initialize_goose_frames(
     mutable_data: &Arc<pcs_simulator::pcs::MutablePcsData>,
     pcs_type_mappings: &HashMap<String, PcsTypeMapping>,
-) -> Result<HashMap<(u8, u16), GooseFrame>> {
+) -> Result<HashMap<u16, FrameMetadata>> {
     let mut frames = HashMap::new();
     
-    // Initialize frames for LAN1
+    // Initialize frames from LAN1 PCS data (will be sent to both LANs)
     for entry in mutable_data.pcs_all_lan1.iter() {
         let logical_id = *entry.key();
         let pcs_data = entry.value();
@@ -199,18 +226,26 @@ fn initialize_goose_frames(
             
             match init_goose_frame_for_pcs(nameplate, type_mapping) {
                 Ok(frame) => {
-                    frames.insert((1, logical_id), frame);
+                    frames.insert(logical_id, FrameMetadata::new(frame));
+                    info!("Initialized unified GOOSE frame for PCS logical_id {}", logical_id);
                 }
                 Err(e) => {
-                    warn!("Failed to initialize frame for LAN1 PCS {}: {}", logical_id, e);
+                    warn!("Failed to initialize frame for PCS {}: {}", logical_id, e);
                 }
             }
         }
     }
     
-    // Initialize frames for LAN2
+    // Note: LAN2 PCS should have same logical_ids as LAN1 (same devices on redundant network)
+    // If LAN2 has different PCS units, add them here
     for entry in mutable_data.pcs_all_lan2.iter() {
         let logical_id = *entry.key();
+        
+        // Skip if already initialized from LAN1
+        if frames.contains_key(&logical_id) {
+            continue;
+        }
+        
         let pcs_data = entry.value();
         
         if let Some(nameplate) = pcs_data.get_nameplate() {
@@ -222,10 +257,11 @@ fn initialize_goose_frames(
             
             match init_goose_frame_for_pcs(nameplate, type_mapping) {
                 Ok(frame) => {
-                    frames.insert((2, logical_id), frame);
+                    frames.insert(logical_id, FrameMetadata::new(frame));
+                    info!("Initialized unified GOOSE frame for PCS logical_id {} (LAN2 only)", logical_id);
                 }
                 Err(e) => {
-                    warn!("Failed to initialize frame for LAN2 PCS {}: {}", logical_id, e);
+                    warn!("Failed to initialize frame for PCS {}: {}", logical_id, e);
                 }
             }
         }
@@ -234,102 +270,163 @@ fn initialize_goose_frames(
     Ok(frames)
 }
 
-/// Spawn publisher thread that periodically sends GOOSE frames
+/// Spawn publisher thread with retransmit logic: 2ms, 4ms, 8ms, ... up to 5000ms
+/// Uses high-precision Condvar notification for instant wakeup on data updates
 fn spawn_publisher_thread(
-    mut goose_frames: HashMap<(u8, u16), GooseFrame>,
+    mut goose_frames: HashMap<u16, FrameMetadata>,
     pcs_type_mappings: HashMap<String, PcsTypeMapping>,
     mutable_data: Arc<pcs_simulator::pcs::MutablePcsData>,
     mut tx_lan1: Option<Box<dyn DataLinkSender>>,
     mut tx_lan2: Option<Box<dyn DataLinkSender>>,
+    update_signal: Arc<RetransmitSignal>,
 ) -> std::thread::JoinHandle<()> {
-    use std::time::Duration;
-    
     std::thread::spawn(move || {
-        info!("GOOSE publisher thread started");
-        let publish_interval = Duration::from_millis(100); // 10 Hz publishing rate
+        info!("GOOSE publisher thread started with retransmit logic (Condvar-based)");
+        const MIN_INTERVAL_MS: u64 = 2;
+        const MAX_INTERVAL_MS: u64 = 5000;
         let mut buffer = vec![0u8; 1600]; // Max ethernet frame size
         
         loop {
-            std::thread::sleep(publish_interval);
+            let loop_start = Instant::now();
+            let mut min_wait_time = Duration::from_millis(MAX_INTERVAL_MS);
+            let now = Instant::now();
             
-            // Update and send LAN1 frames
-            for entry in mutable_data.pcs_all_lan1.iter() {
-                let logical_id = *entry.key();
-                let pcs_data = entry.value();
+            // Process all frames and determine next wakeup time
+            for (logical_id, metadata) in goose_frames.iter_mut() {
+                // Check if data was updated (by comparing with PCS last_update)
+                let mut data_was_updated = false;
                 
-                if let Some(frame) = goose_frames.get_mut(&(1, logical_id)) {
-                    if let Some(nameplate) = pcs_data.get_nameplate() {
-                        if let Some(pcs_type) = &nameplate.pcs_type {
-                            if let Some(type_mapping) = pcs_type_mappings.get(pcs_type) {
-                                // Update frame with current PCS data
-                                if let Err(e) = update_goose_frame_data(frame, &pcs_data, type_mapping) {
-                                    warn!("Failed to update LAN1 PCS {} frame: {}", logical_id, e);
-                                    continue;
-                                }
-                                
-                                // Encode GOOSE frame
-                                buffer.fill(0);
-                                let mut header_copy = frame.0.clone();
-                                let frame_len = encodeGooseFrame(&mut header_copy, &frame.1, &mut buffer, 0);
-                                
-                                // Send on LAN1
-                                if let Some(ref mut tx) = tx_lan1 {
-                                    match tx.build_and_send(1, frame_len, &mut |packet| {
-                                        packet[..frame_len].copy_from_slice(&buffer[..frame_len]);
-                                    }) {
-                                        Some(Ok(())) => { /* Sent successfully */ }
-                                        Some(Err(e)) => {
-                                            warn!("Failed to send LAN1 PCS {} frame: {}", logical_id, e);
+                // Check LAN1 for updates
+                if let Some(pcs_entry) = mutable_data.pcs_all_lan1.get(logical_id) {
+                    let pcs_data = pcs_entry.value();
+                    if let Some(pcs_last_update) = pcs_data.get_last_update() {
+                        // Check if PCS was updated since our last frame update
+                        if metadata.last_update.is_none() || 
+                           pcs_last_update > metadata.last_update.unwrap() {
+                            data_was_updated = true;
+                        }
+                    }
+                }
+                
+                // Reset retransmit interval if data was updated
+                if data_was_updated {
+                    metadata.current_interval_ms = MIN_INTERVAL_MS;
+                    metadata.last_update = Some(SystemTime::now());
+                    info!("PCS {} data updated - reset retransmit interval to {}ms", 
+                          logical_id, MIN_INTERVAL_MS);
+                }
+                
+                // Check if it's time to send this frame
+                let time_since_last_send = metadata.last_send
+                    .map(|t| now.duration_since(t))
+                    .unwrap_or(Duration::from_millis(metadata.current_interval_ms));
+                
+                let interval_duration = Duration::from_millis(metadata.current_interval_ms);
+                
+                if time_since_last_send >= interval_duration {
+                    // Time to send this frame
+                    
+                    // Get PCS data for updating frame (prefer LAN1, fallback to LAN2)
+                    let pcs_data_opt = mutable_data.pcs_all_lan1.get(logical_id)
+                        .or_else(|| mutable_data.pcs_all_lan2.get(logical_id));
+                    
+                    if let Some(pcs_entry) = pcs_data_opt {
+                        let pcs_data = pcs_entry.value();
+                        
+                        if let Some(nameplate) = pcs_data.get_nameplate() {
+                            if let Some(pcs_type) = &nameplate.pcs_type {
+                                if let Some(type_mapping) = pcs_type_mappings.get(pcs_type) {
+                                    // Update frame with current PCS data
+                                    if let Err(e) = update_goose_frame_data(&mut metadata.frame, &pcs_data, type_mapping) {
+                                        warn!("Failed to update PCS {} frame: {}", logical_id, e);
+                                        continue;
+                                    }
+                                    
+                                    // Update sequence numbers
+                                    if data_was_updated {
+                                        metadata.frame.1.stNum = metadata.frame.1.stNum.wrapping_add(1);
+                                        metadata.frame.1.sqNum = 0;
+                                        info!("PCS {} stNum incremented to {}, sqNum reset to 0", 
+                                              logical_id, metadata.frame.1.stNum);
+                                    } else {
+                                        metadata.frame.1.sqNum = metadata.frame.1.sqNum.wrapping_add(1);
+                                    }
+                                    
+                                    // Encode GOOSE frame once
+                                    buffer.fill(0);
+                                    let mut header_copy = metadata.frame.0.clone();
+                                    let frame_len = encodeGooseFrame(&mut header_copy, &metadata.frame.1, &mut buffer, 0);
+                                    
+                                    // Send same frame to both LAN1 and LAN2
+                                    let mut sent_count = 0;
+                                    
+                                    if let Some(ref mut tx) = tx_lan1 {
+                                        match tx.build_and_send(1, frame_len, &mut |packet| {
+                                            packet[..frame_len].copy_from_slice(&buffer[..frame_len]);
+                                        }) {
+                                            Some(Ok(())) => { sent_count += 1; }
+                                            Some(Err(e)) => {
+                                                warn!("Failed to send PCS {} frame to LAN1: {}", logical_id, e);
+                                            }
+                                            None => {
+                                                warn!("Failed to build PCS {} frame for LAN1", logical_id);
+                                            }
                                         }
-                                        None => {
-                                            warn!("Failed to build LAN1 PCS {} frame", logical_id);
+                                    }
+                                    
+                                    if let Some(ref mut tx) = tx_lan2 {
+                                        match tx.build_and_send(1, frame_len, &mut |packet| {
+                                            packet[..frame_len].copy_from_slice(&buffer[..frame_len]);
+                                        }) {
+                                            Some(Ok(())) => { sent_count += 1; }
+                                            Some(Err(e)) => {
+                                                warn!("Failed to send PCS {} frame to LAN2: {}", logical_id, e);
+                                            }
+                                            None => {
+                                                warn!("Failed to build PCS {} frame for LAN2", logical_id);
+                                            }
                                         }
+                                    }
+                                    
+                                    if sent_count > 0 {
+                                        info!("PCS {} frame sent to {} LAN(s) (stNum: {}, sqNum: {}, interval: {}ms)",
+                                              logical_id, sent_count, metadata.frame.1.stNum, 
+                                              metadata.frame.1.sqNum, metadata.current_interval_ms);
+                                    }
+                                    
+                                    // Update send timestamp
+                                    metadata.last_send = Some(now);
+                                    
+                                    // Double interval for next retransmit (if no new data)
+                                    if !data_was_updated && metadata.current_interval_ms < MAX_INTERVAL_MS {
+                                        metadata.current_interval_ms = (metadata.current_interval_ms * 2).min(MAX_INTERVAL_MS);
                                     }
                                 }
                             }
                         }
                     }
+                    
+                    // Next send time is one interval from now
+                    min_wait_time = min_wait_time.min(Duration::from_millis(metadata.current_interval_ms));
+                } else {
+                    // Not time to send yet, calculate remaining time
+                    let remaining = interval_duration - time_since_last_send;
+                    min_wait_time = min_wait_time.min(remaining);
                 }
             }
             
-            // Update and send LAN2 frames
-            for entry in mutable_data.pcs_all_lan2.iter() {
-                let logical_id = *entry.key();
-                let pcs_data = entry.value();
-                
-                if let Some(frame) = goose_frames.get_mut(&(2, logical_id)) {
-                    if let Some(nameplate) = pcs_data.get_nameplate() {
-                        if let Some(pcs_type) = &nameplate.pcs_type {
-                            if let Some(type_mapping) = pcs_type_mappings.get(pcs_type) {
-                                // Update frame with current PCS data
-                                if let Err(e) = update_goose_frame_data(frame, &pcs_data, type_mapping) {
-                                    warn!("Failed to update LAN2 PCS {} frame: {}", logical_id, e);
-                                    continue;
-                                }
-                                
-                                // Encode GOOSE frame
-                                buffer.fill(0);
-                                let mut header_copy = frame.0.clone();
-                                let frame_len = encodeGooseFrame(&mut header_copy, &frame.1, &mut buffer, 0);
-                                
-                                // Send on LAN2
-                                if let Some(ref mut tx) = tx_lan2 {
-                                    match tx.build_and_send(1, frame_len, &mut |packet| {
-                                        packet[..frame_len].copy_from_slice(&buffer[..frame_len]);
-                                    }) {
-                                        Some(Ok(())) => { /* Sent successfully */ }
-                                        Some(Err(e)) => {
-                                            warn!("Failed to send LAN2 PCS {} frame: {}", logical_id, e);
-                                        }
-                                        None => {
-                                            warn!("Failed to build LAN2 PCS {} frame", logical_id);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            // High-precision wait with Condvar for instant wakeup
+            // Returns true if new data arrived (signal_reset called), false if timeout
+            let data_updated = update_signal.wait_timeout(min_wait_time);
+            
+            let actual_elapsed = loop_start.elapsed();
+            
+            if data_updated {
+                info!("New PCS data received after {:?}, instant wakeup for processing", actual_elapsed);
+            } else if actual_elapsed > min_wait_time + Duration::from_millis(1) {
+                warn!("⏱️  Timing variance: target {:?}, actual {:?} (+{}µs)",
+                      min_wait_time, actual_elapsed,
+                      actual_elapsed.as_micros() as i64 - min_wait_time.as_micros() as i64);
             }
         }
     })

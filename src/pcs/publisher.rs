@@ -103,7 +103,7 @@ pub fn init_goose_frame_for_pcs(
     // Parse APPID
     let appid = nameplate.goose_appid.as_ref()
         .ok_or_else(|| anyhow::anyhow!("Missing goose_appid for PCS logical_id {:?}", nameplate.logical_id))?;
-    let appid = parse_hex_u16(appid)?;
+    // let appid = parse_hex_u16(appid)?;
     
     // Get GOOSE PDU fields
     let gocb_ref = nameplate.goose_gocb_ref.as_ref()

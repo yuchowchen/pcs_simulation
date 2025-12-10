@@ -10,19 +10,6 @@ pub struct PublisherPcsData {
     /// Nameplate/configuration values for this PCS (includes device id)
     nameplate: Option<crate::pcs::NameplateConfig>,
     goosepdu: IECGoosePdu, // goosepdu from the latest GOOSE message
-    last_update: Option<std::time::SystemTime>, // timestamp of last update
-    invaliditytime: Option<std::time::SystemTime>, // timestamp when data became invalid
-    statevalid: bool,      // state valid flag from GOOSE
-    
-    // Feedback values - updated from received GOOSE commands
-    /// Active power feedback value in kW (updated from setpoint commands)
-    active_power_feedback: f32,
-    /// Reactive power feedback value in kVAR (updated from setpoint commands)
-    reactive_power_feedback: f32,
-    /// Active power enable flag from received command
-    active_power_enable: bool,
-    /// Reactive power enable flag from received command
-    reactive_power_enable: bool,
 }
 
 impl PublisherPcsData {
@@ -123,11 +110,6 @@ impl PublisherPcsData {
     pub fn set_nameplate(&mut self, cfg: crate::pcs::NameplateConfig) {
         self.nameplate = Some(cfg);
     }
-    /// Get the nameplate configuration
-    pub fn get_nameplate(&self) -> Option<&crate::pcs::NameplateConfig> {
-        self.nameplate.as_ref()
-    }
-
 
     /// Update the goosepdu field with new GOOSE packet data and timestamps.
     /// This is called when a new GOOSE packet is received for this PCS.
@@ -144,7 +126,7 @@ impl PublisherPcsData {
             self.goosepdu.sqNum,
             pdu.sqNum
         );
-        
+
         let is_sequence_valid = self.validate_goose_sequence(pdu, lan_id);
 
         // PERFORMANCE: Copy PDU fields instead of clone() to avoid deep copy of Vec<IECData>
@@ -159,14 +141,15 @@ impl PublisherPcsData {
         self.goosepdu.numDatSetEntries = pdu.numDatSetEntries;
         // Only clone allData if it's needed - this is the expensive part
         self.goosepdu.allData = pdu.allData.clone();
-        
+
         // Update timestamps
         self.last_update = Some(std::time::SystemTime::now());
 
         // Calculate invalidate time based on timeAllowedtoLive from GOOSE PDU
         // timeAllowedtoLive is in milliseconds
         if pdu.timeAllowedtoLive > 0 {
-            let ttl_duration = std::time::Duration::from_millis(pdu.timeAllowedtoLive as u64 * 2+5000); // Use 2x for safety margin and additional 5s it will be configured in the toml file.
+            let ttl_duration =
+                std::time::Duration::from_millis(pdu.timeAllowedtoLive as u64 * 2 + 5000); // Use 2x for safety margin and additional 5s it will be configured in the toml file.
             self.invaliditytime = Some(std::time::SystemTime::now() + ttl_duration);
         }
 
@@ -187,20 +170,24 @@ impl PublisherPcsData {
     }
 
     /// Extract control commands from GOOSE allData and update feedback values
-    /// 
+    ///
     /// The GOOSE command format from PCS controller (subscriber) contains:
     /// - For N PCS units in the GOOSE frame:
     ///   * First N*2 elements: Boolean enable flags (active_power_enable, reactive_power_enable) for each PCS
     ///   * Next N*2 elements: Float setpoints (active_power_setpoint, reactive_power_setpoint) for each PCS
-    /// 
+    ///
     /// # Arguments
     /// * `pcs_index` - The index of this PCS within the GOOSE frame (0-based)
     /// * `total_pcs_count` - Total number of PCS units controlled by this GOOSE frame
-    /// 
+    ///
     /// Returns Ok(()) if commands were successfully extracted and applied, Err otherwise
-    pub fn extract_and_apply_commands(&mut self, pcs_index: usize, total_pcs_count: usize) -> Result<()> {
+    pub fn extract_and_apply_commands(
+        &mut self,
+        pcs_index: usize,
+        total_pcs_count: usize,
+    ) -> Result<()> {
         let alldata = &self.goosepdu.allData;
-        
+
         // Validate that we have enough data
         let expected_entries = total_pcs_count * 4; // 2 booleans + 2 floats per PCS
         if alldata.len() < expected_entries {
@@ -210,40 +197,48 @@ impl PublisherPcsData {
                 alldata.len()
             ));
         }
-        
+
         // Extract boolean enable flags
         // Format: [P_enable_pcs0, Q_enable_pcs0, P_enable_pcs1, Q_enable_pcs1, ...]
         let bool_start_idx = pcs_index * 2;
         let p_enable_idx = bool_start_idx;
         let q_enable_idx = bool_start_idx + 1;
-        
+
         // Extract float setpoints
         // Format: [P_setpoint_pcs0, Q_setpoint_pcs0, P_setpoint_pcs1, Q_setpoint_pcs1, ...]
         // These come after all the boolean flags
         let float_start_idx = total_pcs_count * 2 + (pcs_index * 2);
         let p_setpoint_idx = float_start_idx;
         let q_setpoint_idx = float_start_idx + 1;
-        
+
         // Extract active power enable
         if let Some(p_enable_data) = alldata.get(p_enable_idx) {
             if let Some(p_enable) = p_enable_data.as_bool() {
                 self.active_power_enable = p_enable;
             } else {
-                log::warn!("PCS {} active power enable at index {} is not boolean, got {:?}", 
-                    self.pcs_id(), p_enable_idx, p_enable_data);
+                log::warn!(
+                    "PCS {} active power enable at index {} is not boolean, got {:?}",
+                    self.pcs_id(),
+                    p_enable_idx,
+                    p_enable_data
+                );
             }
         }
-        
+
         // Extract reactive power enable
         if let Some(q_enable_data) = alldata.get(q_enable_idx) {
             if let Some(q_enable) = q_enable_data.as_bool() {
                 self.reactive_power_enable = q_enable;
             } else {
-                log::warn!("PCS {} reactive power enable at index {} is not boolean, got {:?}", 
-                    self.pcs_id(), q_enable_idx, q_enable_data);
+                log::warn!(
+                    "PCS {} reactive power enable at index {} is not boolean, got {:?}",
+                    self.pcs_id(),
+                    q_enable_idx,
+                    q_enable_data
+                );
             }
         }
-        
+
         // Extract active power setpoint
         if let Some(p_setpoint_data) = alldata.get(p_setpoint_idx) {
             if let Some(p_setpoint) = p_setpoint_data.as_f32() {
@@ -254,11 +249,15 @@ impl PublisherPcsData {
                     0.0 // If disabled, feedback goes to zero
                 };
             } else {
-                log::warn!("PCS {} active power setpoint at index {} is not float32, got {:?}", 
-                    self.pcs_id(), p_setpoint_idx, p_setpoint_data);
+                log::warn!(
+                    "PCS {} active power setpoint at index {} is not float32, got {:?}",
+                    self.pcs_id(),
+                    p_setpoint_idx,
+                    p_setpoint_data
+                );
             }
         }
-        
+
         // Extract reactive power setpoint
         if let Some(q_setpoint_data) = alldata.get(q_setpoint_idx) {
             if let Some(q_setpoint) = q_setpoint_data.as_f32() {
@@ -269,11 +268,15 @@ impl PublisherPcsData {
                     0.0 // If disabled, feedback goes to zero
                 };
             } else {
-                log::warn!("PCS {} reactive power setpoint at index {} is not float32, got {:?}", 
-                    self.pcs_id(), q_setpoint_idx, q_setpoint_data);
+                log::warn!(
+                    "PCS {} reactive power setpoint at index {} is not float32, got {:?}",
+                    self.pcs_id(),
+                    q_setpoint_idx,
+                    q_setpoint_data
+                );
             }
         }
-        
+
         log::debug!(
             "PCS {} updated feedback: P_enable={}, P_feedback={:.2}kW, Q_enable={}, Q_feedback={:.2}kVAR",
             self.pcs_id(),
@@ -282,10 +285,10 @@ impl PublisherPcsData {
             self.reactive_power_enable,
             self.reactive_power_feedback
         );
-        
+
         Ok(())
     }
-    
+
     /// Get the current feedback values
     /// Returns (active_power_feedback, reactive_power_feedback, active_power_enable, reactive_power_enable)
     pub fn get_feedback_values(&self) -> (f32, f32, bool, bool) {
@@ -457,8 +460,7 @@ impl PublisherPcsData {
         if let Some(invalid_time) = self.invaliditytime {
             let now = std::time::SystemTime::now();
             if now >= invalid_time {
-                let overdue_duration = now.duration_since(invalid_time)
-                    .unwrap_or_default();
+                let overdue_duration = now.duration_since(invalid_time).unwrap_or_default();
                 let overdue_secs = overdue_duration.as_secs_f64();
                 warn!(
                     "Data for LAN{} PCS ID: {} (APPID: {:04X}) has become invalid due to timeout - expired {}s ago (invalid_time: {:?}, now: {:?})",
@@ -604,31 +606,55 @@ impl MutablePcsData {
         lan_id: u16,
     ) -> bool {
         let appid = u16::from_be_bytes(header.APPID);
-        
-        log::info!("Received GOOSE packet with APPID: {} from LAN{}, updating PCS data", appid, lan_id);
-        
+
+        log::info!(
+            "Received GOOSE packet with APPID: {} from LAN{}, updating PCS data",
+            appid,
+            lan_id
+        );
+
         match lan_id {
             1 => {
-                if let Some(&(logical_id, ref _pcs_type)) = appid_index.appid_to_logical_lan1.get(&appid) {
+                if let Some(&(logical_id, ref _pcs_type)) =
+                    appid_index.appid_to_logical_lan1.get(&appid)
+                {
                     if let Some(mut pcs) = self.pcs_all_lan1.get_mut(&logical_id) {
                         pcs.update_from_goose(pdu, lan_id);
-                        log::info!("Updated PCS data for APPID {} (logical_id: {}) in LAN1", appid, logical_id);
+                        log::info!(
+                            "Updated PCS data for APPID {} (logical_id: {}) in LAN1",
+                            appid,
+                            logical_id
+                        );
                         return true;
                     } else {
-                        log::warn!("PCS with logical_id {} exists in index but not found in LAN{} data", logical_id, lan_id);
+                        log::warn!(
+                            "PCS with logical_id {} exists in index but not found in LAN{} data",
+                            logical_id,
+                            lan_id
+                        );
                     }
                 } else {
                     log::warn!("No PCS found with APPID: {} in LAN{} index", appid, lan_id);
                 }
             }
             2 => {
-                if let Some(&(logical_id, ref _pcs_type)) = appid_index.appid_to_logical_lan2.get(&appid) {
+                if let Some(&(logical_id, ref _pcs_type)) =
+                    appid_index.appid_to_logical_lan2.get(&appid)
+                {
                     if let Some(mut pcs) = self.pcs_all_lan2.get_mut(&logical_id) {
                         pcs.update_from_goose(pdu, lan_id);
-                        log::info!("Updated PCS data for APPID {} (logical_id: {}) in LAN2", appid, logical_id);
+                        log::info!(
+                            "Updated PCS data for APPID {} (logical_id: {}) in LAN2",
+                            appid,
+                            logical_id
+                        );
                         return true;
                     } else {
-                        log::warn!("PCS with logical_id {} exists in index but not found in LAN{} data", logical_id, lan_id);
+                        log::warn!(
+                            "PCS with logical_id {} exists in index but not found in LAN{} data",
+                            logical_id,
+                            lan_id
+                        );
                     }
                 } else {
                     log::warn!("No PCS found with APPID: {} in LAN{} index", appid, lan_id);
@@ -639,205 +665,5 @@ impl MutablePcsData {
             }
         }
         false
-    }
-
-    /// Perform periodic validity check on all PCS data in the specified LAN
-    /// This should be called regularly (e.g., every 500ms) to ensure data validity
-    /// Returns a tuple of (newly_invalid_ids, newly_valid_ids) for complete visibility
-    pub fn check_validity_by_lan(&self, lan_id: u8) -> (Vec<u16>, Vec<u16>) {
-        let mut newly_invalid = Vec::new();
-        let mut newly_valid = Vec::new();
-        
-        let pcs_collection = match lan_id {
-            1 => &self.pcs_all_lan1,
-            2 => &self.pcs_all_lan2,
-            _ => return (newly_invalid, newly_valid),
-        };
-
-        // Collect all logical IDs first to avoid holding locks during iteration
-        let logical_ids: Vec<u16> = pcs_collection.iter().map(|entry| *entry.key()).collect();
-        
-        // Now process each PCS unit individually
-        for logical_id in logical_ids {
-            if let Some(mut pcs) = pcs_collection.get_mut(&logical_id) {
-                let was_valid = pcs.check_and_update_validity(lan_id);
-                let is_valid_now = pcs.is_data_valid();
-                
-                // Track validity transitions
-                if was_valid && !is_valid_now {
-                    newly_invalid.push(logical_id);
-                    let appid = pcs.nameplate_appid().unwrap_or(0);
-                    log::warn!(
-                        "VALIDITY CHANGE: LAN{} PCS logical_id={} (APPID: {:04X}) became INVALID due to timeout",
-                        lan_id, logical_id, appid
-                    );
-                } else if !was_valid && is_valid_now {
-                    newly_valid.push(logical_id);
-                    let appid = pcs.nameplate_appid().unwrap_or(0);
-                    log::info!(
-                        "VALIDITY CHANGE: LAN{} PCS logical_id={} (APPID: {:04X}) became VALID (recovered from GOOSE)",
-                        lan_id, logical_id, appid
-                    );
-                }
-            }
-        }
-        
-        (newly_invalid, newly_valid)
-    }
-
-    /// Check validity for both LANs
-    /// Returns ((lan1_invalid, lan1_valid), (lan2_invalid, lan2_valid))
-    pub fn check_validity_both_lans(&self) -> ((Vec<u16>, Vec<u16>), (Vec<u16>, Vec<u16>)) {
-        let lan1_results = self.check_validity_by_lan(1);
-        let lan2_results = self.check_validity_by_lan(2);
-        (lan1_results, lan2_results)
-    }
-
-    /// Get count of valid and invalid PCS units in specified LAN
-    /// Returns (valid_count, invalid_count, total_count)
-    pub fn get_validity_stats_by_lan(&self, lan_id: u8) -> (usize, usize, usize) {
-        let pcs_collection = match lan_id {
-            1 => &self.pcs_all_lan1,
-            2 => &self.pcs_all_lan2,
-            _ => return (0, 0, 0),
-        };
-
-        let total = pcs_collection.len();
-        let valid = pcs_collection.iter().filter(|entry| entry.value().is_data_valid()).count();
-        let invalid = total - valid;
-        
-        (valid, invalid, total)
-    }
-
-    /// Get validity statistics for both LANs
-    /// Returns ((lan1_valid, lan1_invalid, lan1_total), (lan2_valid, lan2_invalid, lan2_total))
-    pub fn get_validity_stats_both_lans(&self) -> ((usize, usize, usize), (usize, usize, usize)) {
-        let lan1_stats = self.get_validity_stats_by_lan(1);
-        let lan2_stats = self.get_validity_stats_by_lan(2);
-        (lan1_stats, lan2_stats)
-    }
-
-    /// Get list of all invalid PCS logical_ids in specified LAN
-    pub fn get_invalid_pcs_by_lan(&self, lan_id: u8) -> Vec<u16> {
-        let pcs_collection = match lan_id {
-            1 => &self.pcs_all_lan1,
-            2 => &self.pcs_all_lan2,
-            _ => return Vec::new(),
-        };
-
-        pcs_collection
-            .iter()
-            .filter_map(|entry| {
-                let (logical_id, pcs) = entry.pair();
-                if !pcs.is_data_valid() {
-                    Some(*logical_id)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-}
-
-impl Default for MutablePcsData {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Container for PCS process data including index and mutable storage
-#[derive(Debug)]
-pub struct ProcessData {
-    /// Immutable APPID index - safe to share across threads without locks
-    pub appid_index: AppIdIndex,
-    /// Mutable PCS data - requires synchronization for thread safety
-    pub mutable_data: MutablePcsData,
-}
-
-impl Default for ProcessData {
-    fn default() -> Self {
-        Self {
-            appid_index: AppIdIndex::default(),
-            mutable_data: MutablePcsData::default(),
-        }
-    }
-}
-
-impl ProcessData {
-    /// Initialize ProcessData from nameplate CSV file
-    /// Populates both LAN1 and LAN2 data structures and builds APPID indices
-    pub fn init_from_nameplates<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        use log::{error, info};
-        
-        // Load nameplate configurations directly from CSV
-        let mut nameplate_configs = match crate::pcs::nameplate::load_nameplates_from_csv(path) {
-            Ok(configs) => configs,
-            Err(e) => {
-                error!("Failed to load nameplate configurations: {}", e);
-                return Err(e);
-            }
-        };
-        
-        // Sort nameplate configurations by logical_id for better cache locality and performance
-        nameplate_configs.sort_by_key(|config| config.logical_id);
-        
-        info!("Sorted {} nameplate configurations by logical_id for optimized insertion", nameplate_configs.len());
-        
-        // Clear existing data and indices
-        self.mutable_data.pcs_all_lan1.clear();
-        self.mutable_data.pcs_all_lan2.clear();
-        self.appid_index.appid_to_logical_lan1.clear();
-        self.appid_index.appid_to_logical_lan2.clear();
-        
-        // Build PCS data from nameplate configurations (now in sorted order)
-        for config in nameplate_configs {
-            // Extract logical_id from nameplate config, skip if None
-            let logical_id = match config.logical_id {
-                Some(id) => id,
-                None => {
-                    error!("Skipping nameplate config without logical_id: {:?}", config.device_id);
-                    continue;
-                }
-            };
-            
-            // Create PublisherPcsData instance
-            let mut pcs = PublisherPcsData::new();
-            pcs.set_nameplate(config.clone());
-            
-            // Clone the PCS data for both LANs (identical initialization)
-            let pcs_lan1 = pcs.clone();
-            let pcs_lan2 = pcs;
-            
-            // Insert into LAN1 HashMap and build APPID index
-            if let Some(appid) = pcs_lan1.nameplate_appid() {
-                self.appid_index.appid_to_logical_lan1.insert(appid, (logical_id, config.pcs_type.clone().unwrap_or_default()));
-            }
-            self.mutable_data.pcs_all_lan1.insert(logical_id, pcs_lan1);
-            
-            // Insert into LAN2 HashMap and build APPID index (identical to LAN1)
-            if let Some(appid) = pcs_lan2.nameplate_appid() {
-                self.appid_index.appid_to_logical_lan2.insert(appid, (logical_id, config.pcs_type.clone().unwrap_or_default()));
-            }
-            self.mutable_data.pcs_all_lan2.insert(logical_id, pcs_lan2);
-        }
-        
-        info!("Initialized {} PCS units in LAN1 and {} in LAN2", 
-             self.mutable_data.pcs_all_lan1.len(),
-             self.mutable_data.pcs_all_lan2.len());
-        
-        Ok(())
-    }
-
-    /// Decompose ProcessData into its components for Arc-wrapping
-    pub fn into_components(self) -> (AppIdIndex, MutablePcsData) {
-        (self.appid_index, self.mutable_data)
-    }
-
-    /// Reconstruct ProcessData from components
-    pub fn from_components(appid_index: AppIdIndex, mutable_data: MutablePcsData) -> Self {
-        ProcessData {
-            appid_index,
-            mutable_data,
-        }
     }
 }

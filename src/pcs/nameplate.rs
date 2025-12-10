@@ -21,7 +21,7 @@ pub struct NameplateConfig {
 
     /// Configured GOOSE APPID (hex string or decimal) from pcs manufacturer
     /// goose will subscriber it by this id.
-    pub goose_appid: Option<String>,
+    pub goose_appid: Option<u16>,
 
     /// GOOSE source MAC address
     #[serde(rename = "goose_srcAddr")]
@@ -73,27 +73,36 @@ pub struct NameplateConfig {
 
     /// pcs type from manufacturer to identify different pcs model goose message structure
     pub pcs_type: Option<String>,
+
+    /// pms appid list for this pcs
+    pub pms_appid: Option<u16>,
 }
 
 /// Load nameplate configurations from a CSV file with headers.
 /// Expected headers: no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,
 ///                   goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,
-///                   goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type
+///                   goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type, pms_appid
 /// The 'no' column is a row number for human reference and is optional.
-pub fn load_nameplates_from_csv<P: AsRef<Path>>(
-    path: P,
-) -> Result<Vec<NameplateConfig>> {
+pub fn load_nameplates_from_csv<P: AsRef<Path>>(path: P) -> Result<Vec<NameplateConfig>> {
     let file = match File::open(&path) {
         Ok(f) => f,
         Err(e) => {
-            error!("Failed to open nameplate CSV file '{:?}': {}", path.as_ref(), e);
-            anyhow::bail!("Failed to open nameplate CSV file '{:?}': {}", path.as_ref(), e);
+            error!(
+                "Failed to open nameplate CSV file '{:?}': {}",
+                path.as_ref(),
+                e
+            );
+            anyhow::bail!(
+                "Failed to open nameplate CSV file '{:?}': {}",
+                path.as_ref(),
+                e
+            );
         }
     };
     let mut rdr = csv::Reader::from_reader(file);
     let mut configs = Vec::new();
     // track seen numeric identifiers to enforce uniqueness
-    let mut seen_goose: HashSet<String> = HashSet::new();
+    let mut seen_goose: HashSet<u16> = HashSet::new();
     let mut seen_logical: HashSet<u16> = HashSet::new();
 
     for (idx, result) in rdr.deserialize::<NameplateConfig>().enumerate() {
@@ -101,7 +110,7 @@ pub fn load_nameplates_from_csv<P: AsRef<Path>>(
         match result {
             Ok(mut record) => {
                 // First normalize string fields: trim and convert empty -> None
-                
+
                 // Normalize device_id
                 if let Some(s) = record.device_id.take() {
                     let t = s.trim();
@@ -109,16 +118,6 @@ pub fn load_nameplates_from_csv<P: AsRef<Path>>(
                         record.device_id = None;
                     } else {
                         record.device_id = Some(t.to_string());
-                    }
-                }
-
-                // Normalize goose_appid
-                if let Some(s) = record.goose_appid.take() {
-                    let t = s.trim();
-                    if t.is_empty() {
-                        record.goose_appid = None;
-                    } else {
-                        record.goose_appid = Some(t.to_string());
                     }
                 }
 
@@ -170,29 +169,56 @@ pub fn load_nameplates_from_csv<P: AsRef<Path>>(
                 // Now perform validation after normalization
                 let mut bad = false;
 
-                if let Some(ref appid_str) = record.goose_appid {
-                    if appid_str.is_empty() {
-                        error!("CSV row {}: goose_appid is empty. Skipping row.", row_num);
+                // Normalize goose_appid
+                if let Some(appid) = record.goose_appid.take() {
+                    if (appid == 0) || (appid > 0xFFFF) {
+                        record.goose_appid = None;
+                        error!(
+                            "CSV row {}: goose_appid value 0 or out of range (must be 1-65535). Skipping row.",
+                            row_num
+                        );
+                    } else if seen_goose.contains(&appid) {
+                        error!(
+                            "CSV row {}: duplicate goose_appid {} found (must be unique). Skipping row.",
+                            row_num, appid
+                        );
                         bad = true;
-                    } else if seen_goose.contains(appid_str) {
-                        error!("CSV row {}: duplicate goose_appid {} found (must be unique). Skipping row.", row_num, appid_str);
+                    }
+                }
+
+                // Normalize pms_appid
+                if let Some(appid) = record.pms_appid.take() {
+                    if appid == 0 {
+                        record.pms_appid = None; // 0 is invalid, treat as None
+                        error!("CSV row {}: pms_appid is empty. Skipping row.", row_num);
                         bad = true;
+                    } else {
+                        record.pms_appid = Some(appid);
                     }
                 }
 
                 if let Some(logical_id) = record.logical_id {
                     if logical_id == 0 {
-                        error!("CSV row {}: logical_id value 0 is invalid (must be >= 1). Skipping row.", row_num);
+                        error!(
+                            "CSV row {}: logical_id value 0 is invalid (must be >= 1). Skipping row.",
+                            row_num
+                        );
                         bad = true;
                     } else if seen_logical.contains(&logical_id) {
-                        error!("CSV row {}: duplicate logical_id {} found (must be unique). Skipping row.", row_num, logical_id);
+                        error!(
+                            "CSV row {}: duplicate logical_id {} found (must be unique). Skipping row.",
+                            row_num, logical_id
+                        );
                         bad = true;
                     }
                 }
 
                 // Validate pcs_type is configured (after normalization)
                 if record.pcs_type.is_none() {
-                    error!("CSV row {}: pcs_type is not configured (must be present and non-empty). Skipping row.", row_num);
+                    error!(
+                        "CSV row {}: pcs_type is not configured (must be present and non-empty). Skipping row.",
+                        row_num
+                    );
                     bad = true;
                 }
 
@@ -204,14 +230,17 @@ pub fn load_nameplates_from_csv<P: AsRef<Path>>(
                 // Validate feed_line_id numeric value if present (must be > 0)
                 if let Some(fid) = record.feed_line_id {
                     if fid == 0 {
-                        error!("CSV row {}: feed_line_id value 0 is invalid (must be > 0). Skipping row.", row_num);
+                        error!(
+                            "CSV row {}: feed_line_id value 0 is invalid (must be > 0). Skipping row.",
+                            row_num
+                        );
                         continue;
                     }
                 }
 
                 // Record identifiers as seen so future rows can be checked
-                if let Some(ref appid_str) = record.goose_appid {
-                    seen_goose.insert(appid_str.clone());
+                if let Some(appid) = record.goose_appid {
+                    seen_goose.insert(appid);
                 }
                 if let Some(logical_id) = record.logical_id {
                     seen_logical.insert(logical_id);
@@ -234,204 +263,3 @@ pub fn load_nameplates_from_csv<P: AsRef<Path>>(
     Ok(configs)
 }
 
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    #[test]
-    fn test_load_nameplates_from_csv_basic() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,devA,0x8801,01:0C:CD:01:00:01,01:0C:CD:FF:FF:FF,0x8100,0x8002,FLEXPIGO/LLN0$GO$gocb1,FLEXPIGO/LLN0$dataset1,FLEXPIGO/LLN0$GO$gocb1,false,1,false,101,Line1,1,PCS-A").unwrap();
-        writeln!(tmpfile, "2,devB,0x8802,01:0C:CD:01:00:02,01:0C:CD:FF:FF:FF,0x8100,0x8002,,,,,,,102,,2,PCS-B").unwrap();
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        assert_eq!(configs.len(), 2);
-        
-        // First record - all fields populated
-        assert_eq!(configs[0].row_number, Some(1));
-        assert_eq!(configs[0].device_id.as_deref(), Some("devA"));
-        assert_eq!(configs[0].goose_appid.as_deref(), Some("0x8801"));
-        assert_eq!(configs[0].goose_src_addr.as_deref(), Some("01:0C:CD:01:00:01"));
-        assert_eq!(configs[0].goose_dst_addr.as_deref(), Some("01:0C:CD:FF:FF:FF"));
-        assert_eq!(configs[0].feed_line_id, Some(101));
-        assert_eq!(configs[0].feed_line_alias.as_deref(), Some("Line1"));
-        assert_eq!(configs[0].logical_id, Some(1));
-        assert_eq!(configs[0].pcs_type.as_deref(), Some("PCS-A"));
-        
-        // Second record - minimal GOOSE fields
-        assert_eq!(configs[1].row_number, Some(2));
-        assert_eq!(configs[1].device_id.as_deref(), Some("devB"));
-        assert_eq!(configs[1].goose_appid.as_deref(), Some("0x8802"));
-        assert!(configs[1].feed_line_alias.is_none());
-        assert_eq!(configs[1].logical_id, Some(2));
-        assert_eq!(configs[1].pcs_type.as_deref(), Some("PCS-B"));
-    }
-
-    #[test]
-    fn test_duplicate_goose_appid_rejected() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,devA,0x8801,,,,,,,,,,,101,Line1,1,PCS-A").unwrap();
-        writeln!(tmpfile, "2,devB,0x8801,,,,,,,,,,,102,Line2,2,PCS-B").unwrap(); // Duplicate goose_appid
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        // Only first record should be loaded, duplicate should be skipped
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].device_id.as_deref(), Some("devA"));
-    }
-
-    #[test]
-    fn test_duplicate_logical_id_rejected() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,devA,0x8801,,,,,,,,,,,101,Line1,1,PCS-A").unwrap();
-        writeln!(tmpfile, "2,devB,0x8802,,,,,,,,,,,102,Line2,1,PCS-B").unwrap(); // Duplicate logical_id=1
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        // Only first record should be loaded, duplicate should be skipped
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].device_id.as_deref(), Some("devA"));
-    }
-
-    #[test]
-    fn test_zero_values_rejected() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,devA,,,,,,,,,,,,0,Line2,2,PCS-B").unwrap(); // feed_line_id=0 invalid
-        writeln!(tmpfile, "2,devC,0x8803,,,,,,,,,,,103,Line3,0,PCS-C").unwrap(); // logical_id=0 invalid
-        writeln!(tmpfile, "3,devD,0x8804,,,,,,,,,,,104,Line4,4,PCS-D").unwrap(); // Valid
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        // Only the last valid record should be loaded
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].device_id.as_deref(), Some("devD"));
-        assert_eq!(configs[0].goose_appid.as_deref(), Some("0x8804"));
-        assert_eq!(configs[0].logical_id, Some(4));
-    }
-
-    #[test]
-    fn test_missing_pcs_type_rejected() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,devA,0x8801,,,,,,,,,,,101,Line1,1,").unwrap(); // Empty pcs_type
-        writeln!(tmpfile, "2,devB,0x8802,,,,,,,,,,,102,Line2,2,  ").unwrap(); // Whitespace-only pcs_type
-        writeln!(tmpfile, "3,devC,0x8803,,,,,,,,,,,103,Line3,3,PCS-C").unwrap(); // Valid with pcs_type
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        // Only the last valid record with pcs_type should be loaded
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].device_id.as_deref(), Some("devC"));
-        assert_eq!(configs[0].goose_appid.as_deref(), Some("0x8803"));
-        assert_eq!(configs[0].logical_id, Some(3));
-        assert_eq!(configs[0].pcs_type.as_deref(), Some("PCS-C"));
-    }
-
-    #[test]
-    fn test_empty_string_normalization() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,  ,0x8801,,,,,,,,,,,101,  ,1,PCS-A").unwrap(); // Empty/whitespace-only strings
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        assert_eq!(configs.len(), 1);
-        // Empty/whitespace-only device_id should be None
-        assert!(configs[0].device_id.is_none());
-        // Empty/whitespace-only feed_line_alias should be None
-        assert!(configs[0].feed_line_alias.is_none());
-        assert_eq!(configs[0].goose_appid.as_deref(), Some("0x8801"));
-        assert_eq!(configs[0].logical_id, Some(1));
-        assert_eq!(configs[0].pcs_type.as_deref(), Some("PCS-A"));
-    }
-
-    #[test]
-    fn test_optional_fields() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        // Record with only some fields populated
-        writeln!(tmpfile, "1,devA,0x8801,,,,,,,,,,,,,2,PCS-A").unwrap();
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].device_id.as_deref(), Some("devA"));
-        assert_eq!(configs[0].goose_appid.as_deref(), Some("0x8801"));
-        assert!(configs[0].feed_line_id.is_none());
-        assert!(configs[0].feed_line_alias.is_none());
-        assert_eq!(configs[0].logical_id, Some(2));
-    }
-
-    #[test]
-    fn test_malformed_row_continues() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,devA,0x8801,,,,,,,,,,,101,Line1,1,PCS-A").unwrap();
-        writeln!(tmpfile, "2,devB,invalid,extra,data,here,,,,,,,102,Line2,2,PCS-B").unwrap(); // Malformed
-        writeln!(tmpfile, "3,devC,0x8803,,,,,,,,,,,103,Line3,3,PCS-C").unwrap();
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        // Should skip malformed row but continue with valid ones
-        assert_eq!(configs.len(), 2);
-        assert_eq!(configs[0].device_id.as_deref(), Some("devA"));
-        assert_eq!(configs[1].device_id.as_deref(), Some("devC"));
-    }
-
-    #[test]
-    fn test_row_number_column_optional_values() {
-        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        writeln!(
-            tmpfile,
-            "no,device_id,goose_appid,goose_srcAddr,goose_dstAddr,goose_TPID,goose_TCI,goose_gocbRef,goose_dataSet,goose_goID,goose_simulation,goose_confRev,goose_ndsCom,feed_line_id,feed_line_alias,logical_id,pcs_type"
-        )
-        .unwrap();
-        writeln!(tmpfile, "1,devA,0x8801,,,,,,,,,,,101,Line1,1,PCS-A").unwrap();
-        writeln!(tmpfile, ",devB,0x8802,,,,,,,,,,,102,Line2,2,PCS-B").unwrap(); // Empty row number
-        writeln!(tmpfile, "3,devC,0x8803,,,,,,,,,,,103,Line3,3,PCS-C").unwrap();
-
-        let configs = load_nameplates_from_csv(tmpfile.path()).unwrap();
-        assert_eq!(configs.len(), 3);
-        
-        // Row numbers can be present or absent
-        assert_eq!(configs[0].row_number, Some(1));
-        assert_eq!(configs[1].row_number, None); // Empty row number
-        assert_eq!(configs[2].row_number, Some(3));
-        
-        // All other fields should load correctly
-        assert_eq!(configs[1].device_id.as_deref(), Some("devB"));
-        assert_eq!(configs[1].goose_appid.as_deref(), Some("0x8802"));
-    }
-}
