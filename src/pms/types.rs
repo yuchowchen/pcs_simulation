@@ -89,7 +89,7 @@ impl PmsConfig {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PmsGooseCmdSubscriber {
-    pub LAN_id: u16,
+    // pub LAN_id: u16,
     pub goose_appid: u16,
     pub goosepdu: IECGoosePdu, // received GOOSE PDU from PMS
     pub last_update_time: Option<std::time::SystemTime>, // timestamp of last update

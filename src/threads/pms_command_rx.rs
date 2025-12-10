@@ -1,10 +1,12 @@
 use crate::goose::packet_processor::PacketData;
 use crate::os::linux_rt::pin_thread_to_core;
-use crate::pcs::{AppIdIndex, MutablePcsData};
+use crate::pcs::{MutablePcsData};
+use crate::pms::types::PmsGooseCmdSubscriber;
 use crate::pms::types::PmsConfig;
 use crossbeam_channel::Receiver;
 use libc::sched_getcpu;
 use log::{error, info, warn};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -27,6 +29,7 @@ use std::thread::{self, JoinHandle};
 pub fn spawn_worker_threads(
     packet_rx: Receiver<(u16, PacketData)>,
     pms_config: &PmsConfig,
+    pms : HashMap<u16, PmsGooseCmdSubscriber>,
     num_workers: usize,
 ) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::new();
@@ -76,9 +79,35 @@ pub fn spawn_worker_threads(
                         continue;
                     }
 
-                    // return 
+                    // find the corresponding pms command subscriber for this appid
+                    let pms_command_subscriber = pms.get(&appid);
+                    if pms_command_subscriber.is_none() {
+                        warn!(
+                            "No PMS command subscriber found for APPID 0x{:04X} from LAN{}",
+                            appid, lan_id
+                        );
+                        continue;
+                    }
+                    let pms_command_subscriber = pms_command_subscriber.unwrap();
+
+                    if rx_pdu.stNum > pms_command_subscriber.goosepdu.stNum {
+                        info!(
+                            "Received new GOOSE command for APPID 0x{:04X} from LAN{}",
+                            appid, lan_id
+                        );
+                    }
+                    
                     // assign pms command to pcs according to pcs logical_id
-                    pms_config.pms_command_pcs_mapping.
+                    let pcs_lists = pms_config.pms_command_pcs_mapping.get(&appid);
+                    if pcs_lists.is_none() {
+                        warn!(
+                            "No PCS mapping found for APPID 0x{:04X} from LAN{}",
+                            appid, lan_id
+                        );
+                        continue;
+                    }
+                    let pcs_lists = pcs_lists.unwrap();
+
                     // Direct update without lock - DashMap provides per-entry locking
                     let updated = MutablePcsData::update_with_index(
                         &mutable_data_clone,
