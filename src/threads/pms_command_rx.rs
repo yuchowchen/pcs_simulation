@@ -1,5 +1,6 @@
 use crate::goose::packet_processor::PacketData;
 use crate::os::linux_rt::pin_thread_to_core;
+use crate::pcs;
 use crate::pms::types::PmsGooseCmdSubscriber;
 use crate::pms::types::PmsConfig;
 use crossbeam_channel::Receiver;
@@ -29,6 +30,7 @@ pub fn spawn_worker_threads(
     packet_rx: Receiver<(u16, PacketData)>,
     pms_config: Arc<PmsConfig>,
     pms_subscribers: Arc<DashMap<u16, PmsGooseCmdSubscriber>>,
+    pcs_goose_publishers: Arc<DashMap<u16, pcs::types::PcsGoosePublisher>>,
     num_workers: usize,
 ) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::new();
@@ -158,6 +160,16 @@ pub fn spawn_worker_threads(
                             // - Boolean enable flags (active/reactive power control)
                             // - Float setpoint values (active/reactive power)
                             // This needs to be implemented based on the actual GOOSE data structure
+
+                            rx_pdu.allData.iter().for_each(|data| {
+                                // Placeholder: Log data types received
+                                info!(
+                                    "Received GOOSE allData item of type {:?} for APPID 0x{:04X}",
+                                    data., appid
+                                );
+                                // Actual parsing and PCS command updates go here
+                            });         
+                            
                         } else {
                             warn!(
                                 "No PCS mapping found for APPID 0x{:04X} from LAN{}",
