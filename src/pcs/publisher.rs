@@ -168,58 +168,7 @@ pub fn init_goose_frame_for_pcs(
     Ok((eth_header, goose_pdu))
 }
 
-/// Update GOOSE frame allData with current PCS data
-pub fn update_goose_frame_data(
-    frame: &mut GooseFrame,
-    pcs_data: &PublisherPcsData,
-    type_mapping: &PcsTypeMapping,
-) -> Result<()> {
-    // Update allData values based on field mappings
-    // Fields are in correct order from JSON (Vec preserves order)
-    for (data_index, (field_name, _data_type)) in type_mapping.fields.iter().enumerate() {
-        if data_index >= frame.1.allData.len() {
-            break;
-        }
-        
-        // Map field names to actual PCS data based on position in allData
-        // Field order from JSON matches GOOSE frame structure
-        match field_name.as_str() {
-            name if name.contains("realtime_active_power") => {
-                let (active_power, _, _, _) = pcs_data.get_feedback_values();
-                frame.1.allData[data_index] = IECData::float32(active_power);
-            }
-            name if name.contains("realtime_reactive_power") => {
-                let (_, reactive_power, _, _) = pcs_data.get_feedback_values();
-                frame.1.allData[data_index] = IECData::float32(reactive_power);
-            }
-            name if name.contains("status") => {
-                // Default status - extend based on your PCSStatus enum
-                frame.1.allData[data_index] = IECData::int32(2); // Standby
-            }
-            name if name.contains("soc") => {
-                // State of charge - placeholder
-                frame.1.allData[data_index] = IECData::float32(50.0);
-            }
-            name if name.contains("maximum_charging_power") => {
-                frame.1.allData[data_index] = IECData::float32(1000.0); // Placeholder
-            }
-            name if name.contains("maximum_discharging_power") => {
-                frame.1.allData[data_index] = IECData::float32(1000.0); // Placeholder
-            }
-            name if name.contains("maximum_capacitive_power") => {
-                frame.1.allData[data_index] = IECData::float32(500.0); // Placeholder
-            }
-            name if name.contains("maximum_inductive_power") => {
-                frame.1.allData[data_index] = IECData::float32(500.0); // Placeholder
-            }
-            _ => {
-                // Keep default values for spare fields
-            }
-        }
-    }
-    
-    Ok(())
-}
+
 
 /// Parse MAC address string into [u8; 6]
 /// Supports formats: "01:0C:CD:01:00:01", "01-0C-CD-01-00-01", "010CCD010001"

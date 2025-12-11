@@ -30,7 +30,7 @@ pub fn spawn_worker_threads(
     packet_rx: Receiver<(u16, PacketData)>,
     pms_config: Arc<PmsConfig>,
     pms_subscribers: Arc<DashMap<u16, PmsGooseCmdSubscriber>>,
-    pcs_goose_publishers: Arc<DashMap<u16, pcs::types::PcsGoosePublisher>>,
+    // pcs_goose_publishers: Arc<DashMap<u16, pcs::types::PcsGoosePublisher>>,
     num_workers: usize,
 ) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::new();
@@ -165,7 +165,7 @@ pub fn spawn_worker_threads(
                                 // Placeholder: Log data types received
                                 info!(
                                     "Received GOOSE allData item of type {:?} for APPID 0x{:04X}",
-                                    data., appid
+                                    data,appid
                                 );
                                 // Actual parsing and PCS command updates go here
                             });         
