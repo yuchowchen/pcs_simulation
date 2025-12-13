@@ -180,10 +180,13 @@ pub fn load_nameplates_from_csv<P: AsRef<Path>>(path: P) -> Result<Vec<Nameplate
                     } else if seen_goose.contains(&appid) {
                         error!(
                             "CSV row {}: duplicate goose_appid {} found (must be unique). Skipping row.",
-                            row_num, appid
-                        );
+                            row_num, appid);
                         bad = true;
+                    } else {
+                        // Validation passed - restore the value
+                        record.goose_appid = Some(appid);
                     }
+
                 }
 
                 // Normalize pms_appid
@@ -245,6 +248,7 @@ pub fn load_nameplates_from_csv<P: AsRef<Path>>(path: P) -> Result<Vec<Nameplate
                 if let Some(logical_id) = record.logical_id {
                     seen_logical.insert(logical_id);
                 }
+
 
                 configs.push(record);
             }

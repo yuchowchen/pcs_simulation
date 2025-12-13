@@ -27,6 +27,10 @@ pub struct PcsTypeMapping {
 
 /// Load PCS type mappings from JSON file
 /// Preserves field order from JSON which matches GOOSE allData positions
+
+/// IMPORTANT: This function relies on serde_json's "preserve_order" feature to maintain
+/// the exact field order from the JSON file. The order is critical because it determines
+/// the position of each field in the GOOSE allData array.
 pub fn load_pcs_type_mappings(path: &str) -> Result<HashMap<String, PcsTypeMapping>> {
     info!("Loading PCS type mappings from: {}", path);
     
@@ -49,8 +53,9 @@ pub fn load_pcs_type_mappings(path: &str) -> Result<HashMap<String, PcsTypeMappi
             .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'pcstype' field"))?
             .to_string();
         
-        // Build ordered field list from JSON object, preserving insertion order
-        // serde_json::Map preserves the order from the JSON file
+        // Build ordered field list from JSON object
+        // With preserve_order feature enabled, serde_json uses IndexMap which
+        // maintains insertion order from the JSON file exactly as it appears
         let mut fields = Vec::new();
         for (field_name, value) in obj.iter() {
             if field_name == "pcstype" {
@@ -69,7 +74,7 @@ pub fn load_pcs_type_mappings(path: &str) -> Result<HashMap<String, PcsTypeMappi
         };
         
         result.insert(pcs_type.clone(), mapping);
-        info!("Loaded mapping for PCS type: {} with {} fields (order preserved from JSON)", pcs_type, field_count);
+        info!("Loaded PCS type '{}' with {} fields in exact JSON order", pcs_type, field_count);
     }
     
     Ok(result)
