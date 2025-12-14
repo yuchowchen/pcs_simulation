@@ -18,7 +18,7 @@ pub struct PmsConfig {
 
 // create PmsConfig instance from NamplateConfig vecotr
 impl PmsConfig {
-    pub fn from_nameplate_configs(nameplate_configs: &Vec<NameplateConfig>) -> Result<Self> {
+    pub fn load_pms_configs(nameplate_configs: &Vec<NameplateConfig>) -> Result<Self> {
         let mut pms_command_pcs_mapping: HashMap<u16, Vec<u16>> = HashMap::new();
 
         // Iterate through all nameplate configs and group PCS logical_ids by pms_appid

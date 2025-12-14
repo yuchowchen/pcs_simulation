@@ -218,6 +218,52 @@ fn parse_hex_u16(s: &str) -> Result<u16> {
         .with_context(|| format!("Failed to parse hex u16: {}", s))
 }
 
+
+/// fn to initialize goose frames for all pcs in pcs_config
+pub fn initialize_goose_frames_for_pcs(
+    pcs_config: &Vec<NameplateConfig>,
+    pcs_type_config: &HashMap<String, PcsTypeMapping>,
+) -> Vec<(EthernetHeader, IECGoosePdu)>
+{
+    let mut frames = Vec::new();
+    
+    //iterator pcs_config to initialize goose frames
+    for nameplate in pcs_config {
+        //get pcs type from nameplate
+        let pcs_type = match &nameplate.pcs_type {
+            Some(pt) => pt,
+            None => {
+                warn!("PCS nameplate missing pcs_type, skipping...");
+                continue;
+            }
+        };
+        // info!("Initializing GOOSE frame for PCS Type: {:?}", pcs_type);
+        
+        // get PcsTypeMapping from pcs_type_config
+        let pcs_type_mapping = match pcs_type_config.get(pcs_type) {
+            Some(mapping) => mapping,
+            None => {
+                warn!("PCS Type: {:?} not found in PCS type mappings, skipping...", pcs_type);
+                continue;
+            }
+        };
+        
+        // initialize goose frame for pcs
+        match init_goose_frame_for_pcs(nameplate, pcs_type_mapping) {
+            Ok(frame) => {
+                info!("✅ Initialized GOOSE frame for PCS ID: {:?}", nameplate.logical_id);
+                frames.push(frame);
+            }
+            Err(e) => {
+                warn!("Failed to initialize GOOSE frame for PCS ID {:?}: {}", nameplate.logical_id, e);
+            }
+        }
+    }
+    
+    frames
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

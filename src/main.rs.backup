@@ -9,27 +9,22 @@
 
 use anyhow::Result;
 use crossbeam_channel::{bounded};
-use pcs_simulator::pms::types::{PmsConfig, PmsGooseCmdSubscriber};
-use pcs_simulator::goose::types::IECGoosePdu;
+use pcs_simulator::goose::buffer_pool::BufferPool;
+use pcs_simulator::goose::packet_processor::PacketData;
+use pcs_simulator::pms::types::PmsConfig;
 use pcs_simulator::network::setup_network_channels;
 use pcs_simulator::pcs::nameplate::load_nameplates_from_csv;
 use pcs_simulator::pcs::{load_pcs_type_mappings};
 use pcs_simulator::pcs::publisher::initialize_goose_frames_for_pcs;
-use pcs_simulator::threads::pms_command_rx::spawn_worker_threads;
-use dashmap::DashMap;
-use log::{error, info};
+use log::{error, info, warn};
+use pnet_datalink::DataLinkSender;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 fn main() {
-    // Initialize logging with default config path
-    let logging_config = "logging_config.yaml";
-    if let Err(e) = pcs_simulator::os::logs::init_logging(logging_config) {
-        eprintln!("WARNING: Failed to initialize logging: {}", e);
-        eprintln!("Continuing without logging...");
-    }
-    
     if let Err(e) = run() {
-        eprintln!("ERROR: {}", e);
+        error!("Application error: {:?}", e);
         std::process::exit(1);
     }
 }
@@ -51,7 +46,8 @@ fn run() -> Result<()> {
         }
     };
 
-    // Determine number of CPU cores for worker threads
+
+     // Determine number of CPU cores for worker threads
     let num_workers = num_cpus::get();
     info!(
         "System has {} CPU cores, spawning {} worker threads",
@@ -73,6 +69,9 @@ fn run() -> Result<()> {
 
     // Create channels for communication
     let (packet_tx, packet_rx) = bounded(16384); // receive pcs packets - increased for high traffic
+    let (goose_tx, goose_rx) = bounded(10); // goose packet channel for PLC sender
+
+ 
 
     let config_path = &config_paras.0;
     let nameplate_file = format!("{}pcs.csv", config_path);
@@ -89,50 +88,47 @@ fn run() -> Result<()> {
         }
     };
 
-    let pms_config = match PmsConfig::load_pms_configs(&pcs_config) {
-        Ok(config) => {
-            info!("✅ Loaded PMS configuration with {} command APPIDs", config.pms_command_appid_list.len());
-            config
+
+    let pms_configs= PmsConfig::load_pms_configs(&pcs_config);
+    let (pms_command_appid_list, pms_command_pcs_mapping) = match pms {
+        Ok(pms_command_appid_list,pms_command_pcs_mapping) => {
+            info!("✅ Loaded PMS configuration successfully");
+            (pms_command_appid_list, pms_command_pcs_mapping)
         }
         Err(e) => {
             error!("Failed to load PMS configuration: {:?}", e);
             return Err(e);
         }
     };
+    info!("✅ Loaded PMS configuration successfully");
 
     // for test 
     // log::info!("Loaded {:? } PCS nameplates", pcs_config);
     // log::info!("Loaded {:? } PCS type mappings", pcs_type_config);
 
     //iterator pcs_config to initialize goose frames
-    let pcs_frames = initialize_goose_frames_for_pcs(&pcs_config, &pcs_type_config);
+   let mut pcs_frames = initialize_goose_frames_for_pcs(&pcs_config, &pcs_type_config);
     info!("✅ Initialized GOOSE frames for all PCS devices");
     info!("----------------------------------------");
-    info!("pcs frames are : {:?}", pcs_frames);
+    info!("pcs frmaes are : {:?}", pcs_frames);
 
-    // Initialize PMS subscribers DashMap
-    // Create a subscriber entry for each APPID in the PMS command list
-    let pms_subscribers: Arc<DashMap<u16, PmsGooseCmdSubscriber>> = Arc::new(DashMap::new());
-    for &appid in &pms_config.pms_command_appid_list {
-        pms_subscribers.insert(appid, PmsGooseCmdSubscriber {
-            goose_appid: appid,
-            goosepdu: IECGoosePdu::default(),
-            last_update_time: None,
-            invalidity_time: None,
-            invalid: true, // Initially invalid until first GOOSE frame received
-        });
-    }
-    info!("✅ Initialized {} PMS GOOSE command subscribers", pms_subscribers.len());
-
-    // Spawn worker threads for processing incoming GOOSE packets
-    let pms_config_arc = Arc::new(pms_config);
+  // Spawn worker threads
     let worker_handles = spawn_worker_threads(
         packet_rx,
-        pms_config_arc,
-        pms_subscribers,
+        pms_config,
+    pms_subscribers,
         num_workers,
     );
-    info!("✅ Spawned {} worker threads for packet processing", worker_handles.len());
+
+
+
+
+
 
     Ok(())
+  
 }
+
+
+
+
